@@ -23,6 +23,20 @@
 #![deny(missing_docs, unsafe_code)]
 
 use unicode_width::UnicodeWidthChar;
+use unicode_width::UnicodeWidthStr;
+
+use std::borrow::Cow;
+
+/// Defines the alignment for padding
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+pub enum Alignment {
+    /// Align to the left
+    Left,
+    /// Align center
+    Center,
+    /// Align to the right
+    Right,
+}
 
 /// Methods for padding or truncating using displayed width of Unicode strings.
 pub trait UnicodeTruncateStr {
@@ -32,6 +46,9 @@ pub trait UnicodeTruncateStr {
     /// the longest possible string is returned. To help the caller determine the situation, the
     /// display width of the returned string slice is also returned.
     ///
+    /// Zero-width characters decided by [unicode_width](::unicode_width) are always included when
+    /// deciding the truncation point.
+    ///
     /// # Arguments
     /// * `width` - the maximum display width
     ///
@@ -39,6 +56,21 @@ pub trait UnicodeTruncateStr {
     /// Simple ascii string
     /// ...
     fn unicode_truncate(&self, width: usize) -> (&str, usize);
+
+    /// Pads a string to be `width` in terms of display width.
+    ///
+    /// When `truncate` is true, the string is truncated to `width` if necessary. In case of wide
+    /// characters and truncation point not at character boundary, the longest possible string
+    /// is used, and padded to exact `width` according to `align`.
+    /// See [unicode_truncate](unicode_truncate) for the behavior of truncation.
+    ///
+    /// # Arguments
+    /// * `width` - the display width to pad to
+    /// * `align` - alignment for padding
+    /// * `truncate` - whether to truncate string if necessary
+    ///
+    /// # Examples
+    fn unicode_pad(&self, width: usize, align: Alignment, truncate: bool) -> Cow<'_, str>;
 }
 
 impl UnicodeTruncateStr for str {
@@ -76,11 +108,51 @@ impl UnicodeTruncateStr for str {
 
         (self.get(..bidx).unwrap(), new_total_width)
     }
+
+    #[inline]
+    fn unicode_pad(&self, width: usize, align: Alignment, truncate: bool) -> Cow<'_, str> {
+        let mut cols = self.width();
+        let mut cs = Cow::Borrowed(self);
+
+        if cols >= width {
+            if !truncate {
+                return Cow::Borrowed(self);
+            }
+            {
+                let (new_s, new_cols) = self.unicode_truncate(width);
+                cs = Cow::Borrowed(new_s);
+                cols = new_cols;
+            }
+            if cols == width {
+                return cs;
+            }
+        }
+
+        // the string is less than width, or truncated to less than width
+        let diff = width.saturating_sub(cols);
+
+        let (left_pad, right_pad) = match align {
+            Alignment::Left => (0, diff),
+            Alignment::Right => (diff, 0),
+            Alignment::Center => (diff / 2, diff.saturating_sub(diff / 2)),
+        };
+
+        let mut rv = String::new();
+        rv.reserve(left_pad + cs.len() + right_pad);
+        for _ in 0..left_pad {
+            rv.push(' ');
+        }
+        rv.push_str(&cs);
+        for _ in 0..right_pad {
+            rv.push(' ');
+        }
+        Cow::Owned(rv)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::UnicodeTruncateStr;
+    use super::*;
 
     #[test]
     fn truncate_empty() {
@@ -127,5 +199,37 @@ mod tests {
         let (rv, rw) = "你好吗".unicode_truncate(3);
         assert_eq!(rv, "你");
         assert_eq!(rw, 2);
+    }
+
+    #[test]
+    fn pad_zero_width() {
+        let rv = "你好".unicode_pad(0, Alignment::Left, true);
+        assert_eq!(&rv, "");
+
+        let rv = "你好".unicode_pad(0, Alignment::Left, false);
+        assert_eq!(&rv, "你好");
+    }
+
+    #[test]
+    fn pad_less_than_limit() {
+        let rv = "你".unicode_pad(4, Alignment::Left, true);
+        assert_eq!(&rv, "你  ");
+        let rv = "你".unicode_pad(4, Alignment::Left, false);
+        assert_eq!(&rv, "你  ");
+    }
+    #[test]
+    fn pad_width_at_boundary() {
+        let rv = "你好吗".unicode_pad(4, Alignment::Left, true);
+        assert_eq!(&rv, "你好");
+        let rv = "你好吗".unicode_pad(4, Alignment::Left, false);
+        assert_eq!(&rv, "你好吗");
+    }
+    #[test]
+    fn pad_width_not_boundary() {
+        // above limit wide chars not at boundary
+        let rv = "你好吗".unicode_pad(3, Alignment::Left, true);
+        assert_eq!(&rv, "你 ");
+        let rv = "你好吗".unicode_pad(3, Alignment::Left, false);
+        assert_eq!(&rv, "你好吗");
     }
 }

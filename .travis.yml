@@ -1,20 +1,24 @@
 sudo: false
 language: rust
 rust:
-  - stable
-  - beta
-  - nightly
+- stable
+- beta
+- nightly
 env:
-  - CARGO_SET_FEATURES=std
-  - CARGO_SET_FEATURES=
+- CARGO_SET_FEATURES=std
+- CARGO_SET_FEATURES=
 matrix:
   allow_failures:
-    - rust: nightly
+  - rust: nightly
   fast_finish: true
 cache: cargo
-
-# the main build
 script:
-  - |
-    cargo build --verbose &&
-    cargo test --verbose --no-default-features --features "$CARGO_SET_FEATURES"
+- |
+  cargo build --verbose &&
+  cargo test --verbose --no-default-features --features "$CARGO_SET_FEATURES"
+deploy:
+  provider: cargo
+  token:
+    secure: HlTrnX7q+CRJxWTNopVnJeyrtvEdpzlMRQCl2vb5km1hD6rW+YWleAyqKhEBkZR15uKffdz3TOlqzYahmsxnrBileeLgZxEiuBjRvcd/jVi55T0b0fECeApLRWhXEQl+IZ5BAgI0bQOadxJ48wjNDDnUsf74fA1rRriPPoZmkNh/s5ZwvEdWz6nGXR39vH0BuVsrmsjRlB00DW9dCh3vE05l9kM06D8kiXIVQa/KE/hJ5soPGCtFNFveWoOOaggvoW0SpyAqmu7LdHxTiXkQ82mJeqRIAPQk7GYg/KdXkcSwMQnuxE0LXNQSbiwqim3AfrswZsxh5bEu1YrZG9VtCM7bbeH/nndEvzp8PmYHZoC7PnuKAfSZohpejOJbRiyTL1CPZfRDgiP98ScDka4a1w3ealh475NHlFJx0RqYifD8/QxjBQU2yHQgFHgaWs1VgyaJtmd2xYeKcxR0Qbf83iyCFK1w01kgavzGdg/4kg9X2+2+D5HlZ/mh1lJeoIEih8Lsv6pG9Xnts75KYV2gwFPDYA72cTyfPF8bvGiTT4vjG3q7jE1EQaSEPPthohNaTaKSlNaYgmOJQd5t5ZDDwUeXnJoaUD7bok5UQ/N6tsfHyfv6gMhlMoo5Bs5aMB1Wo6lKs7M6S9u6ueG9/CXMgtyZlydc2NEaKrdENycxD6M=
+  on:
+    tags: true

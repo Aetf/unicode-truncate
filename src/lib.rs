@@ -7,7 +7,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Unicode-aware, `O(n)` algorithm to pad or truncate `str` in terms of displayed width.
+//! Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
+//!
+//! See the [UnicodeTruncateStr](crate::UnicodeTruncateStr) trait for new methods
+//! available on `str`.
 //!
 //! # Examples
 //! Safely truncate string to display width even not at character boundaries.
@@ -55,10 +58,6 @@ pub trait UnicodeTruncateStr {
     ///
     /// # Arguments
     /// * `width` - the maximum display width
-    ///
-    /// # Examples
-    /// Simple ascii string
-    /// ...
     fn unicode_truncate(&self, width: usize) -> (&str, usize);
 
     /// Pads a string to be `width` in terms of display width.
@@ -68,14 +67,12 @@ pub trait UnicodeTruncateStr {
     /// When `truncate` is true, the string is truncated to `width` if necessary. In case of wide
     /// characters and truncation point not at character boundary, the longest possible string
     /// is used, and padded to exact `width` according to `align`.
-    /// See [unicode_truncate](unicode_truncate) for the behavior of truncation.
+    /// See [unicode_truncate](crate::UnicodeTruncateStr::unicode_truncate) for the behavior of truncation.
     ///
     /// # Arguments
     /// * `width` - the display width to pad to
     /// * `align` - alignment for padding
     /// * `truncate` - whether to truncate string if necessary
-    ///
-    /// # Examples
     #[cfg(feature = "std")]
     fn unicode_pad(
         &self,

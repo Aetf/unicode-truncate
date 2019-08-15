@@ -4,9 +4,8 @@ version = "0.1.0"
 authors = ["Aetf <aetf@unlimitedcodeworks.xyz>"]
 edition = "2018"
 
-homepage = "https://github.com/Aetf/unicode-width"
-repository = "https://github.com/unicode-rs/unicode-width"
-documentation = "https://unicode-rs.github.io/unicode-width"
+homepage = "https://github.com/Aetf/unicode-truncate"
+repository = "https://github.com/Aetf/unicode-truncate"
 license = "MIT OR Apache-2.0"
 keywords = ["text", "width", "unicode", "truncate", "pad"]
 readme = "README.md"
@@ -16,3 +15,11 @@ Unicode-aware, `O(n)` algorithm to pad or truncate `str` in terms of displayed w
 
 [dependencies]
 unicode-width = "0.1.5"
+
+[features]
+default = ["std"]
+std = []
+
+[[test]]
+name = "integration"
+required-features = ["std"]

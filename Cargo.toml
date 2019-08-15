@@ -10,8 +10,11 @@ license = "MIT OR Apache-2.0"
 keywords = ["text", "width", "unicode", "truncate", "pad"]
 readme = "README.md"
 description = """
-Unicode-aware, `O(n)` algorithm to pad or truncate `str` in terms of displayed width.
+Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
 """
+
+[badges]
+travis-ci = { repository = "Aetf/unicode-truncate" }
 
 [dependencies]
 unicode-width = "0.1.5"

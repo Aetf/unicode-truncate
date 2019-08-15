@@ -1,0 +1,20 @@
+sudo: false
+language: rust
+rust:
+  - stable
+  - beta
+  - nightly
+env:
+  - CARGO_SET_FEATURES=std
+  - CARGO_SET_FEATURES=
+matrix:
+  allow_failures:
+    - rust: nightly
+  fast_finish: true
+cache: cargo
+
+# the main build
+script:
+  - |
+    cargo build --verbose &&
+    cargo test --verbose --no-default-features --features "$CARGO_SET_FEATURES"

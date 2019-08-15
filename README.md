@@ -3,7 +3,7 @@ Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
 
 [![crates.io](https://img.shields.io/crates/v/unicode-truncate.svg)](https://crates.io/crates/unicode-truncate)
 [![Documentation](https://docs.rs/unicode-truncate/badge.svg)](https://docs.rs/unicode-truncate)
-[![Build Status](https://travis-ci.org/Aetf/unicode-truncate.svg)](https://travis-ci.org/Aetf/unicode-truncate)
+[![Build Status](https://travis-ci.com/Aetf/unicode-truncate.svg)](https://travis-ci.com/Aetf/unicode-truncate)
 
 ## examples
 Safely truncate string to display width even not at character boundaries.

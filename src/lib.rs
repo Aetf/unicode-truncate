@@ -47,7 +47,8 @@ use unicode_width::UnicodeWidthStr;
 
 /// Methods for padding or truncating using displayed width of Unicode strings.
 pub trait UnicodeTruncateStr {
-    /// Truncates a string to be at most `width` in terms of display width.
+    /// Truncates a string to be at most `width` in terms of display width, keeping the left-most
+    /// characters.
     ///
     /// For wide characters, it may not always be possible to truncate at exact width. In this case,
     /// the longest possible string is returned. To help the caller determine the situation, the
@@ -59,6 +60,20 @@ pub trait UnicodeTruncateStr {
     /// # Arguments
     /// * `width` - the maximum display width
     fn unicode_truncate(&self, width: usize) -> (&str, usize);
+
+    /// Truncates a string to be at most `width` in terms of display width, keeping the right-most
+    /// characters.
+    ///
+    /// For wide characters, it may not always be possible to truncate at exact width. In this case,
+    /// the longest possible string is returned. To help the caller determine the situation, the
+    /// display width of the returned string slice is also returned.
+    ///
+    /// Zero-width characters decided by [unicode_width](::unicode_width) are always included when
+    /// deciding the truncation point.
+    ///
+    /// # Arguments
+    /// * `width` - the maximum display width
+    fn unicode_truncate_left(&self, width: usize) -> (&str, usize);
 
     /// Pads a string to be `width` in terms of display width.
     /// Only available when the `std` feature of this library is activated,
@@ -97,6 +112,29 @@ impl UnicodeTruncateStr for str {
         }
 
         for (bidx, c) in self.char_indices().rev() {
+            new_width = new_width - c.width().unwrap_or(0);
+            if new_width <= width {
+                return (self.get(..bidx).unwrap(), new_width);
+            }
+        }
+
+        (self.get(..0).unwrap(), 0)
+    }
+    
+    #[inline]
+    fn unicode_truncate_left(&self, width: usize) -> (&str, usize) {
+        // bail out fast
+        if width == 0 {
+            return (self.get(..0).unwrap(), 0);
+        }
+
+        let mut new_width = self.width();
+
+        if new_width <= width {
+            return (self, new_width);
+        }
+
+        for (bidx, c) in self.char_indices() {
             new_width = new_width - c.width().unwrap_or(0);
             if new_width <= width {
                 return (self.get(..bidx).unwrap(), new_width);

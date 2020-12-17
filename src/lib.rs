@@ -134,10 +134,14 @@ impl UnicodeTruncateStr for str {
             return (self, new_width);
         }
 
-        for (bidx, c) in self.char_indices() {
-            new_width = new_width - c.width().unwrap_or(0);
+        let mut char_indices = s.char_indices();
+        while let Some((_, c)) = char_indices.next() {
+            new_width -= c.width().unwrap_or(0);
             if new_width <= width {
-                return (self.get(bidx..).unwrap(), new_width);
+                return match char_indices.next() {
+                    None => (s.get(..0).unwrap(), 0),
+                    Some((i, _)) => (s.get(i..).unwrap(), new_width),
+                };
             }
         }
 
@@ -268,6 +272,61 @@ mod tests {
             assert_eq!(rw, 2);
 
             let (rv, rw) = "你好吗".unicode_truncate(1);
+            assert_eq!(rv, "");
+            assert_eq!(rw, 0);
+        }
+    }
+
+    mod truncate_start {
+        use super::super::*;
+
+        #[test]
+        fn empty() {
+            let (rv, rw) = "".unicode_truncate_start(4);
+            assert_eq!(rv, "");
+            assert_eq!(rw, 0);
+        }
+
+        #[test]
+        fn zero_width() {
+            let (rv, rw) = "ab".unicode_truncate_start(0);
+            assert_eq!(rv, "");
+            assert_eq!(rw, 0);
+
+            let (rv, rw) = "你好".unicode_truncate_start(0);
+            assert_eq!(rv, "");
+            assert_eq!(rw, 0);
+        }
+
+        #[test]
+        fn less_than_limit() {
+            let (rv, rw) = "abc".unicode_truncate_start(4);
+            assert_eq!(rv, "abc");
+            assert_eq!(rw, 3);
+
+            let (rv, rw) = "你".unicode_truncate_start(4);
+            assert_eq!(rv, "你");
+            assert_eq!(rw, 2);
+        }
+
+        #[test]
+        fn at_boundary() {
+            let (rv, rw) = "boundary".unicode_truncate_start(5);
+            assert_eq!(rv, "ndary");
+            assert_eq!(rw, 5);
+
+            let (rv, rw) = "你好吗".unicode_truncate_start(4);
+            assert_eq!(rv, "好吗");
+            assert_eq!(rw, 4);
+        }
+
+        #[test]
+        fn not_boundary() {
+            let (rv, rw) = "你好吗".unicode_truncate_start(3);
+            assert_eq!(rv, "吗");
+            assert_eq!(rw, 2);
+
+            let (rv, rw) = "你好吗".unicode_truncate_start(1);
             assert_eq!(rv, "");
             assert_eq!(rw, 0);
         }

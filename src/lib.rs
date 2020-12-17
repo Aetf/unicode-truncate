@@ -42,6 +42,8 @@ assert_eq!(rv.width(), 5);
 #![deny(missing_docs, unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
+use core::iter;
+
 use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
@@ -100,52 +102,42 @@ pub trait UnicodeTruncateStr {
 impl UnicodeTruncateStr for str {
     #[inline]
     fn unicode_truncate(&self, width: usize) -> (&str, usize) {
-        // bail out fast
-        if width == 0 {
-            return (self.get(..0).unwrap(), 0);
-        }
-
-        let mut new_width = self.width();
-
-        if new_width <= width {
-            return (self, new_width);
-        }
-
-        for (bidx, c) in self.char_indices().rev() {
-            new_width = new_width - c.width().unwrap_or(0);
-            if new_width <= width {
-                return (self.get(..bidx).unwrap(), new_width);
-            }
-        }
-
-        (self.get(..0).unwrap(), 0)
+        let (bidx, new_width) = self.char_indices()
+            // map to byte index and the width of char start at the index
+            .map(|(bidx, c)| (bidx, c.width().unwrap_or(0)))
+            // chain a final element representing the position past the last char
+            .chain(iter::once((self.len(), 0)))
+            // fold to byte index and the width up to the index
+            .scan(0, |w, (bidx, cw)| {
+                let curr_w = *w;
+                *w = *w + cw;
+                Some((bidx, curr_w))
+            })
+            // take the longest but still shorter than requested
+            .take_while(|&(_, w)| w <= width)
+            .last()
+            .unwrap_or((0, 0));
+        (self.get(..bidx).unwrap(), new_width)
     }
-    
+
     #[inline]
     fn unicode_truncate_start(&self, width: usize) -> (&str, usize) {
-        // bail out fast
-        if width == 0 {
-            return (self.get(..0).unwrap(), 0);
-        }
+        let (bidx, new_width) = iter::once((self.len(), 0))
+            .chain(
+                self.char_indices()
+                    .rev()
+                    .map(|(bidx, c)| (bidx, c.width().unwrap_or(0)))
+            )
+            // fold to byte index and the width from end to the index
+            .scan(0, |w, (bidx, cw)| {
+                *w = *w + cw;
+                Some((bidx, *w))
+            })
+            .take_while(|&(_, w)| w <= width)
+            .last()
+            .unwrap_or((self.len(), 0));
 
-        let mut new_width = self.width();
-
-        if new_width <= width {
-            return (self, new_width);
-        }
-
-        let mut char_indices = self.char_indices();
-        while let Some((_, c)) = char_indices.next() {
-            new_width -= c.width().unwrap_or(0);
-            if new_width <= width {
-                return match char_indices.next() {
-                    None => (self.get(..0).unwrap(), 0),
-                    Some((i, _)) => (self.get(i..).unwrap(), new_width),
-                };
-            }
-        }
-
-        (self.get(..0).unwrap(), 0)
+        (self.get(bidx..).unwrap(), new_width)
     }
 
     #[cfg(feature = "std")]

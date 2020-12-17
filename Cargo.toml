@@ -12,12 +12,22 @@ readme = "README.md"
 description = """
 Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
 """
+exclude = [
+    "benches/*",
+    "tests/*",
+]
 
 [badges]
 travis-ci = { repository = "Aetf/unicode-truncate" }
 
 [dependencies]
 unicode-width = "0.1.5"
+
+[dev-dependencies]
+criterion = "0.3"
+
+[lib]
+bench = false
 
 [features]
 default = ["std"]
@@ -26,3 +36,7 @@ std = []
 [[test]]
 name = "integration"
 required-features = ["std"]
+
+[[bench]]
+name = "benchmark"
+harness = false

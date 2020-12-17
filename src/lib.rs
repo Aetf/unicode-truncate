@@ -134,13 +134,13 @@ impl UnicodeTruncateStr for str {
             return (self, new_width);
         }
 
-        let mut char_indices = s.char_indices();
+        let mut char_indices = self.char_indices();
         while let Some((_, c)) = char_indices.next() {
             new_width -= c.width().unwrap_or(0);
             if new_width <= width {
                 return match char_indices.next() {
-                    None => (s.get(..0).unwrap(), 0),
-                    Some((i, _)) => (s.get(i..).unwrap(), new_width),
+                    None => (self.get(..0).unwrap(), 0),
+                    Some((i, _)) => (self.get(i..).unwrap(), new_width),
                 };
             }
         }

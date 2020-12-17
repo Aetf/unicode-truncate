@@ -47,7 +47,8 @@ use unicode_width::UnicodeWidthStr;
 
 /// Methods for padding or truncating using displayed width of Unicode strings.
 pub trait UnicodeTruncateStr {
-    /// Truncates a string to be at most `width` in terms of display width.
+    /// Truncates a string to be at most `width` in terms of display width by removing the end
+    /// characters.
     ///
     /// For wide characters, it may not always be possible to truncate at exact width. In this case,
     /// the longest possible string is returned. To help the caller determine the situation, the
@@ -59,6 +60,20 @@ pub trait UnicodeTruncateStr {
     /// # Arguments
     /// * `width` - the maximum display width
     fn unicode_truncate(&self, width: usize) -> (&str, usize);
+
+    /// Truncates a string to be at most `width` in terms of display width by removing the start
+    /// characters.
+    ///
+    /// For wide characters, it may not always be possible to truncate at exact width. In this case,
+    /// the longest possible string is returned. To help the caller determine the situation, the
+    /// display width of the returned string slice is also returned.
+    ///
+    /// Zero-width characters decided by [unicode_width](::unicode_width) are always included when
+    /// deciding the truncation point.
+    ///
+    /// # Arguments
+    /// * `width` - the maximum display width
+    fn unicode_truncate_start(&self, width: usize) -> (&str, usize);
 
     /// Pads a string to be `width` in terms of display width.
     /// Only available when the `std` feature of this library is activated,
@@ -100,6 +115,33 @@ impl UnicodeTruncateStr for str {
             new_width = new_width - c.width().unwrap_or(0);
             if new_width <= width {
                 return (self.get(..bidx).unwrap(), new_width);
+            }
+        }
+
+        (self.get(..0).unwrap(), 0)
+    }
+    
+    #[inline]
+    fn unicode_truncate_start(&self, width: usize) -> (&str, usize) {
+        // bail out fast
+        if width == 0 {
+            return (self.get(..0).unwrap(), 0);
+        }
+
+        let mut new_width = self.width();
+
+        if new_width <= width {
+            return (self, new_width);
+        }
+
+        let mut char_indices = self.char_indices();
+        while let Some((_, c)) = char_indices.next() {
+            new_width -= c.width().unwrap_or(0);
+            if new_width <= width {
+                return match char_indices.next() {
+                    None => (self.get(..0).unwrap(), 0),
+                    Some((i, _)) => (self.get(i..).unwrap(), new_width),
+                };
             }
         }
 
@@ -230,6 +272,61 @@ mod tests {
             assert_eq!(rw, 2);
 
             let (rv, rw) = "你好吗".unicode_truncate(1);
+            assert_eq!(rv, "");
+            assert_eq!(rw, 0);
+        }
+    }
+
+    mod truncate_start {
+        use super::super::*;
+
+        #[test]
+        fn empty() {
+            let (rv, rw) = "".unicode_truncate_start(4);
+            assert_eq!(rv, "");
+            assert_eq!(rw, 0);
+        }
+
+        #[test]
+        fn zero_width() {
+            let (rv, rw) = "ab".unicode_truncate_start(0);
+            assert_eq!(rv, "");
+            assert_eq!(rw, 0);
+
+            let (rv, rw) = "你好".unicode_truncate_start(0);
+            assert_eq!(rv, "");
+            assert_eq!(rw, 0);
+        }
+
+        #[test]
+        fn less_than_limit() {
+            let (rv, rw) = "abc".unicode_truncate_start(4);
+            assert_eq!(rv, "abc");
+            assert_eq!(rw, 3);
+
+            let (rv, rw) = "你".unicode_truncate_start(4);
+            assert_eq!(rv, "你");
+            assert_eq!(rw, 2);
+        }
+
+        #[test]
+        fn at_boundary() {
+            let (rv, rw) = "boundary".unicode_truncate_start(5);
+            assert_eq!(rv, "ndary");
+            assert_eq!(rw, 5);
+
+            let (rv, rw) = "你好吗".unicode_truncate_start(4);
+            assert_eq!(rv, "好吗");
+            assert_eq!(rw, 4);
+        }
+
+        #[test]
+        fn not_boundary() {
+            let (rv, rw) = "你好吗".unicode_truncate_start(3);
+            assert_eq!(rv, "吗");
+            assert_eq!(rw, 2);
+
+            let (rv, rw) = "你好吗".unicode_truncate_start(1);
             assert_eq!(rv, "");
             assert_eq!(rw, 0);
         }

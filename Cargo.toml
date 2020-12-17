@@ -13,8 +13,7 @@ description = """
 Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
 """
 exclude = [
-    "benches/*",
-    "tests/*",
+    "benches/data/*",
 ]
 
 [badges]

@@ -47,7 +47,7 @@ use unicode_width::UnicodeWidthStr;
 
 /// Methods for padding or truncating using displayed width of Unicode strings.
 pub trait UnicodeTruncateStr {
-    /// Truncates a string to be at most `width` in terms of display width, keeping the left-most
+    /// Truncates a string to be at most `width` in terms of display width by removing the end
     /// characters.
     ///
     /// For wide characters, it may not always be possible to truncate at exact width. In this case,
@@ -61,7 +61,7 @@ pub trait UnicodeTruncateStr {
     /// * `width` - the maximum display width
     fn unicode_truncate(&self, width: usize) -> (&str, usize);
 
-    /// Truncates a string to be at most `width` in terms of display width, keeping the right-most
+    /// Truncates a string to be at most `width` in terms of display width by removing the start
     /// characters.
     ///
     /// For wide characters, it may not always be possible to truncate at exact width. In this case,
@@ -73,7 +73,7 @@ pub trait UnicodeTruncateStr {
     ///
     /// # Arguments
     /// * `width` - the maximum display width
-    fn unicode_truncate_left(&self, width: usize) -> (&str, usize);
+    fn unicode_truncate_start(&self, width: usize) -> (&str, usize);
 
     /// Pads a string to be `width` in terms of display width.
     /// Only available when the `std` feature of this library is activated,
@@ -122,7 +122,7 @@ impl UnicodeTruncateStr for str {
     }
     
     #[inline]
-    fn unicode_truncate_left(&self, width: usize) -> (&str, usize) {
+    fn unicode_truncate_start(&self, width: usize) -> (&str, usize) {
         // bail out fast
         if width == 0 {
             return (self.get(..0).unwrap(), 0);

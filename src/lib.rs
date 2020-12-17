@@ -137,7 +137,7 @@ impl UnicodeTruncateStr for str {
         for (bidx, c) in self.char_indices() {
             new_width = new_width - c.width().unwrap_or(0);
             if new_width <= width {
-                return (self.get(..bidx).unwrap(), new_width);
+                return (self.get(bidx..).unwrap(), new_width);
             }
         }
 

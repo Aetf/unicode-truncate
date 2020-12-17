@@ -21,10 +21,10 @@ exclude = [
 travis-ci = { repository = "Aetf/unicode-truncate" }
 
 [dependencies]
-unicode-width = "0.1.5"
+unicode-width = "0.1.8"
 
 [dev-dependencies]
-criterion = "0.3"
+criterion = "0.3.3"
 
 [lib]
 bench = false

@@ -39,12 +39,9 @@ assert_eq!(str.width(), 5);
 "##
 )]
 
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Defines the alignment for padding.
-/// Only available when the `std` feature of this library is activated,
-/// and it is activated by default.
-#[cfg(feature = "std")]
+/// Defines the alignment for truncation and padding.
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum Alignment {
     /// Align to the left
@@ -85,6 +82,46 @@ pub trait UnicodeTruncateStr {
     /// * `max_width` - the maximum display width
     fn unicode_truncate_start(&self, max_width: usize) -> (&str, usize);
 
+    /// Truncates a string to be at most `width` in terms of display width by removing
+    /// characters at both start and end.
+    ///
+    /// For wide characters, it may not always be possible to truncate at exact width. In this case,
+    /// the longest possible string is returned. To help the caller determine the situation, the
+    /// display width of the returned string slice is also returned.
+    ///
+    /// Zero-width characters decided by [`unicode_width`] are always included when deciding the
+    /// truncation point.
+    ///
+    /// # Arguments
+    /// * `max_width` - the maximum display width
+    fn unicode_truncate_centered(&self, max_width: usize) -> (&str, usize);
+
+    /// Truncates a string to be at most `width` in terms of display width by removing
+    /// characters.
+    ///
+    /// Depending on the alignment characters are removed. When left aligned characters from the end
+    /// are removed. When right aligned characters from the start are removed. When centered
+    /// characters from both sides are removed.
+    ///
+    /// For wide characters, it may not always be possible to truncate at exact width. In this case,
+    /// the longest possible string is returned. To help the caller determine the situation, the
+    /// display width of the returned string slice is also returned.
+    ///
+    /// Zero-width characters decided by [`unicode_width`] are always included when deciding the
+    /// truncation point.
+    ///
+    /// # Arguments
+    /// * `max_width` - the maximum display width
+    /// * `align` - alignment for truncation
+    #[inline]
+    fn unicode_truncate_aligned(&self, max_width: usize, align: Alignment) -> (&str, usize) {
+        match align {
+            Alignment::Left => self.unicode_truncate(max_width),
+            Alignment::Center => self.unicode_truncate_centered(max_width),
+            Alignment::Right => self.unicode_truncate_start(max_width),
+        }
+    }
+
     /// Pads a string to be `width` in terms of display width. Only available when the `std` feature
     /// of this library is activated, and it is activated by default.
     ///
@@ -96,7 +133,7 @@ pub trait UnicodeTruncateStr {
     ///
     /// # Arguments
     /// * `target_width` - the display width to pad to
-    /// * `align` - alignment for padding
+    /// * `align` - alignment for truncation and padding
     /// * `truncate` - whether to truncate string if necessary
     #[cfg(feature = "std")]
     fn unicode_pad(
@@ -151,6 +188,64 @@ impl UnicodeTruncateStr for str {
         (self.get(byte_index..).unwrap(), new_width)
     }
 
+    #[allow(clippy::collapsible_else_if)]
+    #[inline]
+    fn unicode_truncate_centered(&self, max_width: usize) -> (&str, usize) {
+        if max_width == 0 {
+            return ("", 0);
+        }
+
+        let mut current_width: usize = self.width();
+        if current_width <= max_width {
+            return (self, current_width);
+        }
+
+        let mut iter = self
+            .char_indices()
+            // map to byte index and the width of char start at the index
+            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
+            // zero width doesn't need to be checked, they are always kept
+            .filter(|&(_, char_width)| char_width > 0);
+
+        let mut start_is_truncated = false;
+        let mut end_index = self.len();
+
+        // Amount of things taken from start / end. Tries to balance out to keep the center center.
+        let mut balance: isize = 0;
+
+        while current_width > max_width {
+            if balance >= 0 {
+                if let Some((byte_index, char_width)) = iter.next_back() {
+                    current_width = current_width.saturating_sub(char_width);
+                    end_index = byte_index;
+                    balance = balance.saturating_sub(char_width as isize);
+                } else {
+                    break;
+                }
+            } else {
+                if let Some((_, char_width)) = iter.next() {
+                    current_width = current_width.saturating_sub(char_width);
+                    start_is_truncated = true;
+                    balance = balance.saturating_add(char_width as isize);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        // When truncation happened at the start then get the next byte_index as thats where it
+        // actually starts. Reason: index is where the char starts, not where it ends.
+        let start_index = if start_is_truncated {
+            iter.next().map_or(end_index, |(byte_index, _)| byte_index)
+        } else {
+            0
+        };
+
+        let result = self.get(start_index..end_index).unwrap();
+        debug_assert_eq!(result.width(), current_width);
+        (result, current_width)
+    }
+
     #[cfg(feature = "std")]
     #[inline]
     fn unicode_pad(
@@ -160,8 +255,6 @@ impl UnicodeTruncateStr for str {
         truncate: bool,
     ) -> std::borrow::Cow<'_, str> {
         use std::borrow::Cow;
-
-        use unicode_width::UnicodeWidthStr;
 
         if !truncate && self.width() >= target_width {
             return Cow::Borrowed(self);
@@ -195,8 +288,10 @@ impl UnicodeTruncateStr for str {
 
 #[cfg(test)]
 mod tests {
-    mod truncate {
-        use super::super::*;
+    use super::*;
+
+    mod truncate_end {
+        use super::*;
 
         #[test]
         fn empty() {
@@ -229,7 +324,7 @@ mod tests {
     }
 
     mod truncate_start {
-        use super::super::*;
+        use super::*;
 
         #[test]
         fn empty() {
@@ -261,9 +356,55 @@ mod tests {
         }
     }
 
+    mod truncate_centered {
+        use super::*;
+
+        #[test]
+        fn empty() {
+            assert_eq!("".unicode_truncate_centered(4), ("", 0));
+        }
+
+        #[test]
+        fn zero_width() {
+            assert_eq!("ab".unicode_truncate_centered(0), ("", 0));
+            assert_eq!("你好".unicode_truncate_centered(0), ("", 0));
+        }
+
+        #[test]
+        fn less_than_limit() {
+            assert_eq!("abc".unicode_truncate_centered(4), ("abc", 3));
+            assert_eq!("你".unicode_truncate_centered(4), ("你", 2));
+        }
+
+        #[test]
+        fn at_boundary() {
+            assert_eq!("boundary".unicode_truncate_centered(5), ("ounda", 5));
+            assert_eq!("你好吗".unicode_truncate_centered(4), ("你好", 4));
+        }
+
+        #[test]
+        fn not_boundary() {
+            assert_eq!("你好吗".unicode_truncate_centered(3), ("好", 2));
+            assert_eq!("你好吗".unicode_truncate_centered(1), ("", 0));
+        }
+    }
+
+    #[test]
+    fn truncate_aligned() {
+        assert_eq!("abc".unicode_truncate_aligned(1, Alignment::Left), ("a", 1));
+        assert_eq!(
+            "abc".unicode_truncate_aligned(1, Alignment::Center),
+            ("b", 1)
+        );
+        assert_eq!(
+            "abc".unicode_truncate_aligned(1, Alignment::Right),
+            ("c", 1)
+        );
+    }
+
     #[cfg(feature = "std")]
     mod pad {
-        use super::super::*;
+        use super::*;
 
         #[test]
         fn zero_width() {
@@ -289,6 +430,10 @@ mod tests {
             assert_eq!("你好吗".unicode_pad(3, Alignment::Left, true), "你 ");
             assert_eq!("你好吗".unicode_pad(1, Alignment::Left, true), " ");
             assert_eq!("你好吗".unicode_pad(3, Alignment::Left, false), "你好吗");
+
+            assert_eq!("你好吗".unicode_pad(3, Alignment::Center, true), "你 ");
+
+            assert_eq!("你好吗".unicode_pad(3, Alignment::Right, true), " 你");
         }
     }
 }

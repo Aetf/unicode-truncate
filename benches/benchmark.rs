@@ -32,6 +32,9 @@ fn criterion_benchmark(criterion: &mut Criterion) {
         group.bench_with_input("start", input, |bench, str| {
             bench.iter(|| str.unicode_truncate_start(max_width));
         });
+        group.bench_with_input("centered", input, |bench, str| {
+            bench.iter(|| str.unicode_truncate_centered(max_width));
+        });
         group.finish();
     }
 }

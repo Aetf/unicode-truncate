@@ -3,6 +3,7 @@ name = "unicode-truncate"
 version = "0.2.0"
 authors = ["Aetf <aetf@unlimitedcodeworks.xyz>"]
 edition = "2018"
+rust-version = "1.38.0"
 
 homepage = "https://github.com/Aetf/unicode-truncate"
 repository = "https://github.com/Aetf/unicode-truncate"
@@ -20,10 +21,10 @@ exclude = [
 travis-ci = { repository = "Aetf/unicode-truncate" }
 
 [dependencies]
-unicode-width = "0.1.8"
+unicode-width = "0.1"
 
 [dev-dependencies]
-criterion = "0.3.3"
+criterion = "0.4"
 
 [lib]
 bench = false

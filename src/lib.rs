@@ -118,6 +118,9 @@ impl UnicodeTruncateStr for str {
             .chain(core::iter::once((self.len(), 0)))
             // fold to byte index and the width up to the index
             .scan(0, |sum, (byte_index, char_width)| {
+                // byte_index is the start while the char_width is at the end. Current width is the
+                // sum until now while the next byte_start width is including the current
+                // char_width.
                 let current_width = *sum;
                 *sum += char_width;
                 Some((byte_index, current_width))
@@ -131,12 +134,12 @@ impl UnicodeTruncateStr for str {
 
     #[inline]
     fn unicode_truncate_start(&self, max_width: usize) -> (&str, usize) {
-        let (byte_index, new_width) = core::iter::once((self.len(), 0))
-            .chain(
-                self.char_indices()
-                    .rev()
-                    .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0))),
-            )
+        let (byte_index, new_width) = self
+            .char_indices()
+            // instead of start checking from the start do so from the end
+            .rev()
+            // map to byte index and the width of char start at the index
+            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
             // fold to byte index and the width from end to the index
             .scan(0, |sum, (byte_index, char_width)| {
                 *sum += char_width;

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use unicode_truncate::UnicodeTruncateStr;
 
 fn roughly_cut(str: &str, size: usize) -> &str {
@@ -15,21 +15,25 @@ fn roughly_cut(str: &str, size: usize) -> &str {
 }
 
 fn criterion_benchmark(criterion: &mut Criterion) {
-    static KB: usize = 1024;
-    static TEXT: &str = include_str!("data/zhufu.txt");
+    const KB: usize = 1024;
+    const TEXT: &str = include_str!("data/zhufu.txt");
 
-    let mut group = criterion.benchmark_group("zhu fu");
-    group
-        .sample_size(1000)
-        .measurement_time(Duration::from_secs(20));
-    for size in &[KB, 2 * KB, 4 * KB, 8 * KB, 16 * KB, 28 * KB] {
-        let str = roughly_cut(TEXT, *size);
-        group.throughput(Throughput::Bytes(*size as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(size), str, |bench, str| {
-            bench.iter(|| str.unicode_truncate(str.len() / 2));
+    for &size in &[KB, 2 * KB, 4 * KB, 8 * KB, 16 * KB, 28 * KB] {
+        let mut group = criterion.benchmark_group(format!("zhu fu/{size}"));
+        group
+            .sample_size(1000)
+            .measurement_time(Duration::from_secs(20))
+            .throughput(Throughput::Bytes(size as u64));
+        let input = roughly_cut(TEXT, size);
+        let max_width = input.len() / 2;
+        group.bench_with_input("end", input, |bench, str| {
+            bench.iter(|| str.unicode_truncate(max_width));
         });
+        group.bench_with_input("start", input, |bench, str| {
+            bench.iter(|| str.unicode_truncate_start(max_width));
+        });
+        group.finish();
     }
-    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

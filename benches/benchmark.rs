@@ -1,33 +1,42 @@
-use criterion::{criterion_group, criterion_main, Criterion, Throughput, BenchmarkId};
-
-use unicode_truncate::UnicodeTruncateStr;
 use std::time::Duration;
 
-fn roughly_cut(s: &str, size: usize) -> &str {
-    if size >= s.len() {
-        return s;
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use unicode_truncate::UnicodeTruncateStr;
+
+fn roughly_cut(str: &str, size: usize) -> &str {
+    if size >= str.len() {
+        return str;
     }
     let mut end = size;
-    while !s.is_char_boundary(end) {
+    while !str.is_char_boundary(end) {
         end += 1;
     }
-    &s[..end]
+    &str[..end]
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
-    static KB: usize = 1024;
-    static TEXT: &str = include_str!("data/zhufu.txt");
+fn criterion_benchmark(criterion: &mut Criterion) {
+    const KB: usize = 1024;
+    const TEXT: &str = include_str!("data/zhufu.txt");
 
-    let mut group = c.benchmark_group("zhu fu");
-    group.sample_size(1000).measurement_time(Duration::from_secs(20));
-    for size in [KB, 2 * KB, 4 * KB, 8 * KB, 16 * KB, 28 * KB].iter() {
-        let s = roughly_cut(TEXT, *size);
-        group.throughput(Throughput::Bytes(*size as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(size), s, |b, s| {
-            b.iter(|| s.unicode_truncate(s.len() / 2));
+    for &size in &[KB, 2 * KB, 4 * KB, 8 * KB, 16 * KB, 28 * KB] {
+        let mut group = criterion.benchmark_group(format!("zhu fu/{size}"));
+        group
+            .sample_size(1000)
+            .measurement_time(Duration::from_secs(20))
+            .throughput(Throughput::Bytes(size as u64));
+        let input = roughly_cut(TEXT, size);
+        let max_width = input.len() / 2;
+        group.bench_with_input("end", input, |bench, str| {
+            bench.iter(|| str.unicode_truncate(max_width));
         });
+        group.bench_with_input("start", input, |bench, str| {
+            bench.iter(|| str.unicode_truncate_start(max_width));
+        });
+        group.bench_with_input("centered", input, |bench, str| {
+            bench.iter(|| str.unicode_truncate_centered(max_width));
+        });
+        group.finish();
     }
-    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

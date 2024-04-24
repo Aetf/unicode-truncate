@@ -12,7 +12,7 @@
 
 //! Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
 //!
-//! See the [UnicodeTruncateStr](crate::UnicodeTruncateStr) trait for new methods available on
+//! See the [`UnicodeTruncateStr`](crate::UnicodeTruncateStr) trait for new methods available on
 //! `str`.
 //!
 //! # Examples
@@ -154,12 +154,12 @@ impl UnicodeTruncateStr for str {
             // chain a final element representing the position past the last char
             .chain(core::iter::once((self.len(), 0)))
             // fold to byte index and the width up to the index
-            .scan(0, |sum, (byte_index, char_width)| {
+            .scan(0, |sum: &mut usize, (byte_index, char_width)| {
                 // byte_index is the start while the char_width is at the end. Current width is the
                 // sum until now while the next byte_start width is including the current
                 // char_width.
                 let current_width = *sum;
-                *sum += char_width;
+                *sum = sum.checked_add(char_width)?;
                 Some((byte_index, current_width))
             })
             // take the longest but still shorter than requested
@@ -182,8 +182,8 @@ impl UnicodeTruncateStr for str {
             // map to byte index and the width of char start at the index
             .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
             // fold to byte index and the width from end to the index
-            .scan(0, |sum, (byte_index, char_width)| {
-                *sum += char_width;
+            .scan(0, |sum: &mut usize, (byte_index, char_width)| {
+                *sum = sum.checked_add(char_width)?;
                 Some((byte_index, *sum))
             })
             .take_while(|&(_, current_width)| current_width <= max_width)
@@ -224,7 +224,9 @@ impl UnicodeTruncateStr for str {
         while current_width > max_width {
             if balance >= 0 {
                 if let Some((byte_index, char_width)) = iter.next_back() {
-                    current_width = current_width.saturating_sub(char_width);
+                    current_width = current_width
+                        .checked_sub(char_width)
+                        .expect("total - parts shouldnt be less than 0");
                     end_index = byte_index;
                     balance = balance.saturating_sub(char_width as isize);
                 } else {
@@ -232,7 +234,9 @@ impl UnicodeTruncateStr for str {
                 }
             } else {
                 if let Some((_, char_width)) = iter.next() {
-                    current_width = current_width.saturating_sub(char_width);
+                    current_width = current_width
+                        .checked_sub(char_width)
+                        .expect("total - parts shouldnt be less than 0");
                     start_is_truncated = true;
                     balance = balance.saturating_add(char_width as isize);
                 } else {

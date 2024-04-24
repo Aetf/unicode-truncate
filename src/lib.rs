@@ -224,7 +224,9 @@ impl UnicodeTruncateStr for str {
         while current_width > max_width {
             if balance >= 0 {
                 if let Some((byte_index, char_width)) = iter.next_back() {
-                    current_width = current_width.saturating_sub(char_width);
+                    current_width = current_width
+                        .checked_sub(char_width)
+                        .expect("total - parts shouldnt be less than 0");
                     end_index = byte_index;
                     balance = balance.saturating_sub(char_width as isize);
                 } else {
@@ -232,7 +234,9 @@ impl UnicodeTruncateStr for str {
                 }
             } else {
                 if let Some((_, char_width)) = iter.next() {
-                    current_width = current_width.saturating_sub(char_width);
+                    current_width = current_width
+                        .checked_sub(char_width)
+                        .expect("total - parts shouldnt be less than 0");
                     start_is_truncated = true;
                     balance = balance.saturating_add(char_width as isize);
                 } else {

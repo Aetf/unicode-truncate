@@ -166,7 +166,11 @@ impl UnicodeTruncateStr for str {
             .take_while(|&(_, current_width)| current_width <= max_width)
             .last()
             .unwrap_or((0, 0));
-        (self.get(..byte_index).unwrap(), new_width)
+
+        // unwrap is safe as the index comes from char_indices
+        let result = self.get(..byte_index).unwrap();
+        debug_assert_eq!(result.width(), new_width);
+        (result, new_width)
     }
 
     #[inline]
@@ -185,7 +189,11 @@ impl UnicodeTruncateStr for str {
             .take_while(|&(_, current_width)| current_width <= max_width)
             .last()
             .unwrap_or((self.len(), 0));
-        (self.get(byte_index..).unwrap(), new_width)
+
+        // unwrap is safe as the index comes from char_indices
+        let result = self.get(byte_index..).unwrap();
+        debug_assert_eq!(result.width(), new_width);
+        (result, new_width)
     }
 
     #[allow(clippy::collapsible_else_if)]
@@ -241,6 +249,7 @@ impl UnicodeTruncateStr for str {
             0
         };
 
+        // unwrap is safe as the index comes from char_indices
         let result = self.get(start_index..end_index).unwrap();
         debug_assert_eq!(result.width(), current_width);
         (result, current_width)

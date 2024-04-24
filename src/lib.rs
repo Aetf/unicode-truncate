@@ -12,7 +12,7 @@
 
 //! Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
 //!
-//! See the [UnicodeTruncateStr](crate::UnicodeTruncateStr) trait for new methods available on
+//! See the [`UnicodeTruncateStr`](crate::UnicodeTruncateStr) trait for new methods available on
 //! `str`.
 //!
 //! # Examples

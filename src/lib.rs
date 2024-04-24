@@ -75,7 +75,7 @@ pub trait UnicodeTruncateStr {
     /// the longest possible string is returned. To help the caller determine the situation, the
     /// display width of the returned string slice is also returned.
     ///
-    /// Zero-width characters decided by [`unicode_width`] are always included when deciding the
+    /// Zero-width characters decided by [`unicode_width`] are always removed when deciding the
     /// truncation point.
     ///
     /// # Arguments
@@ -89,8 +89,8 @@ pub trait UnicodeTruncateStr {
     /// the longest possible string is returned. To help the caller determine the situation, the
     /// display width of the returned string slice is also returned.
     ///
-    /// Zero-width characters decided by [`unicode_width`] are always included when deciding the
-    /// truncation point.
+    /// Zero-width characters decided by [`unicode_width`] are included if they are at end, or
+    /// removed if they are at the beginning when deciding the truncation point.
     ///
     /// # Arguments
     /// * `max_width` - the maximum display width
@@ -107,8 +107,8 @@ pub trait UnicodeTruncateStr {
     /// the longest possible string is returned. To help the caller determine the situation, the
     /// display width of the returned string slice is also returned.
     ///
-    /// Zero-width characters decided by [`unicode_width`] are always included when deciding the
-    /// truncation point.
+    /// Zero-width characters decided by [`unicode_width`] are included if they are at end, or
+    /// removed if they are at the beginning when deciding the truncation point.
     ///
     /// # Arguments
     /// * `max_width` - the maximum display width
@@ -181,6 +181,9 @@ impl UnicodeTruncateStr for str {
             .rev()
             // map to byte index and the width of char start at the index
             .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
+            // skip any position with zero width, the cut won't happen at these points
+            // this also helps with not including zero width char at the beginning
+            .filter(|&(_, char_width)| char_width > 0)
             // fold to byte index and the width from end to the index
             .scan(0, |sum: &mut usize, (byte_index, char_width)| {
                 *sum = sum.checked_add(char_width)?;
@@ -334,6 +337,18 @@ mod tests {
             assert_eq!("你好吗".unicode_truncate(3), ("你", 2));
             assert_eq!("你好吗".unicode_truncate(1), ("", 0));
         }
+
+        #[test]
+        fn zero_width_char_in_middle() {
+            // zero width character in the middle is intact
+            assert_eq!("y\u{0306}es".unicode_truncate(2), ("y\u{0306}e", 2));
+        }
+
+        #[test]
+        fn keep_zero_width_char_at_boundary() {
+            // zero width character at end is preserved
+            assert_eq!("y\u{0306}ey\u{0306}s".unicode_truncate(3), ("y\u{0306}ey\u{0306}", 3));
+        }
     }
 
     mod truncate_start {
@@ -367,6 +382,18 @@ mod tests {
             assert_eq!("你好吗".unicode_truncate_start(3), ("吗", 2));
             assert_eq!("你好吗".unicode_truncate_start(1), ("", 0));
         }
+
+        #[test]
+        fn zero_width_char_in_middle() {
+            // zero width character in middle is preserved
+            assert_eq!("y\u{0306}ey\u{0306}s".unicode_truncate_start(2), ("y\u{0306}s", 2));
+        }
+
+        #[test]
+        fn remove_zero_width_char_at_boundary() {
+            // zero width character in the middle at the cutting boundary is removed
+            assert_eq!("y\u{0306}es".unicode_truncate_start(2), ("es", 2));
+        }
     }
 
     mod truncate_centered {
@@ -399,6 +426,19 @@ mod tests {
         fn not_boundary() {
             assert_eq!("你好吗".unicode_truncate_centered(3), ("好", 2));
             assert_eq!("你好吗".unicode_truncate_centered(1), ("", 0));
+        }
+
+        #[test]
+        fn zero_width_char_in_middle() {
+            // zero width character in middle is preserved
+            assert_eq!("yy\u{0306}es".unicode_truncate_centered(2), ("y\u{0306}e", 2));
+        }
+
+        #[test]
+        fn zero_width_char_at_boundary() {
+            // zero width character at the cutting boundary in the start is removed
+            // but those in the end is kept.
+            assert_eq!("y\u{0306}ey\u{0306}y\u{0306}".unicode_truncate_centered(2), ("ey\u{0306}", 2));
         }
     }
 

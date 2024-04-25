@@ -39,6 +39,7 @@ assert_eq!(str.width(), 5);
 "##
 )]
 
+use itertools::{merge_join_by, Either};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// Defines the alignment for truncation and padding.
@@ -206,60 +207,87 @@ impl UnicodeTruncateStr for str {
             return ("", 0);
         }
 
-        let mut current_width: usize = self.width();
-        if current_width <= max_width {
-            return (self, current_width);
+        let original_width = self.width();
+        if original_width <= max_width {
+            return (self, original_width);
         }
 
-        let mut iter = self
+        // We need to remove at least this much
+        let min_removal_width = original_width - max_width;
+
+        let from_start = self
             .char_indices()
-            // map to byte index and the width of char start at the index
             .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
-            // zero width doesn't need to be checked, they are always kept
-            .filter(|&(_, char_width)| char_width > 0);
+            // skip any position with zero width, the cut won't happen at these points
+            // this also helps with removing zero width char at the beginning
+            .filter(|&(_, char_width)| char_width > 0)
+            // fold to byte index and the width from start to the index (not including the current
+            // char width)
+            .scan(
+                (0usize, 0usize),
+                |(sum, prev_width), (byte_index, char_width)| {
+                    *sum = sum.checked_add(*prev_width)?;
+                    *prev_width = char_width;
+                    Some((byte_index, *sum))
+                },
+            )
+            // fast forward to around the half (min_removal_width - 2) to take accound into
+            // accidentally remove more than needed due to char width (max 2)
+            .skip_while(|&(_, removed)| {
+                min_removal_width > 2 && removed < (min_removal_width - 2) / 2
+            });
 
-        let mut start_is_truncated = false;
-        let mut end_index = self.len();
+        let from_end = self
+            .char_indices()
+            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
+            // skip any position with zero width, the cut won't happen at these points
+            // this also helps with keeping zero width char at the end
+            .filter(|&(_, char_width)| char_width > 0)
+            .rev()
+            // fold to byte index and the width from end to the index (including the current char width)
+            .scan(0usize, |sum, (byte_index, char_width)| {
+                *sum = sum.checked_add(char_width)?;
+                Some((byte_index, *sum))
+            })
+            // fast forward to around the half (min_removal_width - 2) to take accound into
+            // accidentally remove more than needed due to char width (max 2)
+            .skip_while(|&(_, removed)| {
+                min_removal_width > 2 && removed < (min_removal_width - 2 + 1) / 2
+            });
 
-        // Amount of things taken from start / end. Tries to balance out to keep the center center.
-        let mut balance: isize = 0;
-
-        while current_width > max_width {
-            if balance >= 0 {
-                if let Some((byte_index, char_width)) = iter.next_back() {
-                    current_width = current_width
-                        .checked_sub(char_width)
-                        .expect("total - parts shouldnt be less than 0");
-                    end_index = byte_index;
-                    balance = balance.saturating_sub(char_width as isize);
-                } else {
-                    break;
+        let (start_index, end_index, removed_width) = merge_join_by(
+            from_start,
+            from_end,
+            // taking from either left or right iter depending on which side has less removed width
+            |&(_, start_removed), &(_, end_removed)| start_removed < end_removed,
+        )
+        // remember the last left or right and combine them to one sequence of operations
+        .scan(
+            (0usize, 0usize, 0usize, 0usize),
+            |(start_removed, end_removed, start_index, end_index), position| {
+                match position {
+                    Either::Left((idx, removed)) => {
+                        *start_index = idx;
+                        *start_removed = removed;
+                    }
+                    Either::Right((idx, removed)) => {
+                        *end_index = idx;
+                        *end_removed = removed;
+                    }
                 }
-            } else {
-                if let Some((_, char_width)) = iter.next() {
-                    current_width = current_width
-                        .checked_sub(char_width)
-                        .expect("total - parts shouldnt be less than 0");
-                    start_is_truncated = true;
-                    balance = balance.saturating_add(char_width as isize);
-                } else {
-                    break;
-                }
-            }
-        }
-
-        // When truncation happened at the start then get the next byte_index as thats where it
-        // actually starts. Reason: index is where the char starts, not where it ends.
-        let start_index = if start_is_truncated {
-            iter.next().map_or(end_index, |(byte_index, _)| byte_index)
-        } else {
-            0
-        };
+                Some((*start_index, *end_index, *start_removed + *end_removed))
+            },
+        )
+        .find(|&(_, _, removed)| removed >= min_removal_width)
+        // should not happen as the removed width is not larger than the original width
+        // but a sane default is to remove everything (i.e. min_removal_width too large)
+        .unwrap_or((0, 0, original_width));
 
         // unwrap is safe as the index comes from char_indices
         let result = self.get(start_index..end_index).unwrap();
-        debug_assert_eq!(result.width(), current_width);
-        (result, current_width)
+        // unwrap is safe as removed is always smaller than total width
+        let result_width = original_width.checked_sub(removed_width).unwrap();
+        (result, result_width)
     }
 
     #[cfg(feature = "std")]
@@ -347,7 +375,10 @@ mod tests {
         #[test]
         fn keep_zero_width_char_at_boundary() {
             // zero width character at end is preserved
-            assert_eq!("y\u{0306}ey\u{0306}s".unicode_truncate(3), ("y\u{0306}ey\u{0306}", 3));
+            assert_eq!(
+                "y\u{0306}ey\u{0306}s".unicode_truncate(3),
+                ("y\u{0306}ey\u{0306}", 3)
+            );
         }
     }
 
@@ -386,7 +417,10 @@ mod tests {
         #[test]
         fn zero_width_char_in_middle() {
             // zero width character in middle is preserved
-            assert_eq!("y\u{0306}ey\u{0306}s".unicode_truncate_start(2), ("y\u{0306}s", 2));
+            assert_eq!(
+                "y\u{0306}ey\u{0306}s".unicode_truncate_start(2),
+                ("y\u{0306}s", 2)
+            );
         }
 
         #[test]
@@ -418,27 +452,50 @@ mod tests {
 
         #[test]
         fn at_boundary() {
-            assert_eq!("boundary".unicode_truncate_centered(5), ("ounda", 5));
-            assert_eq!("你好吗".unicode_truncate_centered(4), ("你好", 4));
+            assert_eq!(
+                "boundaryboundary".unicode_truncate_centered(5),
+                ("arybo", 5)
+            );
+            assert_eq!(
+                "你好吗你好吗你好吗".unicode_truncate_centered(4),
+                ("你好", 4)
+            );
         }
 
         #[test]
         fn not_boundary() {
-            assert_eq!("你好吗".unicode_truncate_centered(3), ("好", 2));
-            assert_eq!("你好吗".unicode_truncate_centered(1), ("", 0));
+            assert_eq!("你好吗你好吗".unicode_truncate_centered(3), ("吗", 2));
+            assert_eq!("你好吗你好吗".unicode_truncate_centered(1), ("", 0));
         }
 
         #[test]
         fn zero_width_char_in_middle() {
             // zero width character in middle is preserved
-            assert_eq!("yy\u{0306}es".unicode_truncate_centered(2), ("y\u{0306}e", 2));
+            assert_eq!(
+                "yy\u{0306}es".unicode_truncate_centered(2),
+                ("y\u{0306}e", 2)
+            );
         }
 
         #[test]
         fn zero_width_char_at_boundary() {
             // zero width character at the cutting boundary in the start is removed
             // but those in the end is kept.
-            assert_eq!("y\u{0306}ey\u{0306}y\u{0306}".unicode_truncate_centered(2), ("ey\u{0306}", 2));
+            assert_eq!(
+                "y\u{0306}ea\u{0306}b\u{0306}y\u{0306}ea\u{0306}b\u{0306}"
+                    .unicode_truncate_centered(2),
+                ("b\u{0306}y\u{0306}", 2)
+            );
+            assert_eq!(
+                "ay\u{0306}ea\u{0306}b\u{0306}y\u{0306}ea\u{0306}b\u{0306}"
+                    .unicode_truncate_centered(2),
+                ("a\u{0306}b\u{0306}", 2)
+            );
+            assert_eq!(
+                "y\u{0306}ea\u{0306}b\u{0306}y\u{0306}ea\u{0306}b\u{0306}a"
+                    .unicode_truncate_centered(2),
+                ("b\u{0306}y\u{0306}", 2)
+            );
         }
     }
 

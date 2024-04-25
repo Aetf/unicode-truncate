@@ -21,6 +21,7 @@ exclude = [
 travis-ci = { repository = "Aetf/unicode-truncate" }
 
 [dependencies]
+itertools = { version = "0.12.1", default-features = false }
 unicode-width = "0.1"
 
 [dev-dependencies]

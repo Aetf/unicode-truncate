@@ -217,8 +217,8 @@ impl UnicodeTruncateStr for str {
         // unwrap is safe as original_width > max_width
         let min_removal_width = original_width.checked_sub(max_width).unwrap();
 
-        // around the half (min_removal_width - 2) to take accound into accidentally remove more
-        // than needed due to char width (max 2)
+        // around the half (min_removal_width - 2) to prevent accidentally removing more than needed
+        // due to char width (max 2)
         let less_than_half = min_removal_width.saturating_sub(2) / 2;
 
         let from_start = self

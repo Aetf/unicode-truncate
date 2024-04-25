@@ -43,6 +43,14 @@ jobs:
       - run: cargo clippy --offline --all-features --all-targets
       - run: cargo doc --offline --all-features --no-deps
 
+  msrv:
+    name: Check MSRV
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: taiki-e/install-action@cargo-hack
+    - run: cargo hack check --rust-version --workspace --all-targets --ignore-private
+
   features:
     name: Features ${{ matrix.toolchain }} ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -52,7 +60,6 @@ jobs:
         toolchain:
           - stable
           - beta
-          - 1.68 # MSRV: minimum supported Rust version
         os:
           - ubuntu-latest
           - macos-latest
@@ -64,12 +71,9 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.toolchain }}
-      - uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-hack
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@cargo-hack
 
       - uses: actions/checkout@v4
       - run: cargo fetch --locked
@@ -91,7 +95,6 @@ jobs:
           - stable
           - beta
           - nightly
-          - 1.68 # MSRV: minimum supported Rust version
         os:
           - ubuntu-latest
           - macos-latest

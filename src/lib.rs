@@ -8,6 +8,7 @@
 // except according to those terms.
 
 #![forbid(missing_docs, unsafe_code)]
+#![warn(clippy::arithmetic_side_effects)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
 //! Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
@@ -213,7 +214,12 @@ impl UnicodeTruncateStr for str {
         }
 
         // We need to remove at least this much
-        let min_removal_width = original_width - max_width;
+        // unwrap is safe as original_width > max_width
+        let min_removal_width = original_width.checked_sub(max_width).unwrap();
+
+        // around the half (min_removal_width - 2) to take accound into accidentally remove more
+        // than needed due to char width (max 2)
+        let less_than_half = min_removal_width.saturating_sub(2) / 2;
 
         let from_start = self
             .char_indices()
@@ -231,11 +237,8 @@ impl UnicodeTruncateStr for str {
                     Some((byte_index, *sum))
                 },
             )
-            // fast forward to around the half (min_removal_width - 2) to take accound into
-            // accidentally remove more than needed due to char width (max 2)
-            .skip_while(|&(_, removed)| {
-                min_removal_width > 2 && removed < (min_removal_width - 2) / 2
-            });
+            // fast forward to around the half
+            .skip_while(|&(_, removed)| min_removal_width > 2 && removed < less_than_half);
 
         let from_end = self
             .char_indices()
@@ -244,16 +247,14 @@ impl UnicodeTruncateStr for str {
             // this also helps with keeping zero width char at the end
             .filter(|&(_, char_width)| char_width > 0)
             .rev()
-            // fold to byte index and the width from end to the index (including the current char width)
+            // fold to byte index and the width from end to the index (including the current char
+            // width)
             .scan(0usize, |sum, (byte_index, char_width)| {
                 *sum = sum.checked_add(char_width)?;
                 Some((byte_index, *sum))
             })
-            // fast forward to around the half (min_removal_width - 2) to take accound into
-            // accidentally remove more than needed due to char width (max 2)
-            .skip_while(|&(_, removed)| {
-                min_removal_width > 2 && removed < (min_removal_width - 2 + 1) / 2
-            });
+            // fast forward to around the half
+            .skip_while(|&(_, removed)| min_removal_width > 2 && removed < less_than_half);
 
         let (start_index, end_index, removed_width) = merge_join_by(
             from_start,
@@ -275,7 +276,9 @@ impl UnicodeTruncateStr for str {
                         *end_removed = removed;
                     }
                 }
-                Some((*start_index, *end_index, *start_removed + *end_removed))
+                // unwrap is safe as total length was also <= usize::MAX
+                let total_removed = start_removed.checked_add(*end_removed).unwrap();
+                Some((*start_index, *end_index, total_removed))
             },
         )
         .find(|&(_, _, removed)| removed >= min_removal_width)
@@ -287,6 +290,7 @@ impl UnicodeTruncateStr for str {
         let result = self.get(start_index..end_index).unwrap();
         // unwrap is safe as removed is always smaller than total width
         let result_width = original_width.checked_sub(removed_width).unwrap();
+        debug_assert_eq!(result.width(), result_width);
         (result, result_width)
     }
 
@@ -311,14 +315,18 @@ impl UnicodeTruncateStr for str {
 
         // the string is less than width, or truncated to less than width
         let diff = target_width.saturating_sub(columns);
-
         let (left_pad, right_pad) = match align {
             Alignment::Left => (0, diff),
             Alignment::Right => (diff, 0),
             Alignment::Center => (diff / 2, diff.saturating_sub(diff / 2)),
         };
+        debug_assert_eq!(diff, left_pad.saturating_add(right_pad));
 
-        let mut result = String::with_capacity(left_pad + truncated.len() + right_pad);
+        let new_len = truncated
+            .len()
+            .checked_add(diff)
+            .expect("Padded result should fit in a new String");
+        let mut result = String::with_capacity(new_len);
         for _ in 0..left_pad {
             result.push(' ');
         }
@@ -448,6 +456,12 @@ mod tests {
         fn less_than_limit() {
             assert_eq!("abc".unicode_truncate_centered(4), ("abc", 3));
             assert_eq!("你".unicode_truncate_centered(4), ("你", 2));
+        }
+
+        /// The source code has special handling for small `min_removal_width` (half-point)
+        #[test]
+        fn truncate_exactly_one() {
+            assert_eq!("abcd".unicode_truncate_centered(3), ("abc", 3));
         }
 
         #[test]

@@ -52,7 +52,7 @@ jobs:
         toolchain:
           - stable
           - beta
-          - 1.38 # MSRV: minimum supported Rust version
+          - 1.68 # MSRV: minimum supported Rust version
         os:
           - ubuntu-latest
           - macos-latest
@@ -91,7 +91,7 @@ jobs:
           - stable
           - beta
           - nightly
-          - 1.38 # MSRV: minimum supported Rust version
+          - 1.68 # MSRV: minimum supported Rust version
         os:
           - ubuntu-latest
           - macos-latest

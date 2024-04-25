@@ -1,4 +1,4 @@
-name: Test and Build Rust
+name: Publish to crates.io
 
 on:
   push:
@@ -10,7 +10,6 @@ on:
 
 jobs:
   publish:
-    name: Publish to crates.io
     runs-on: ubuntu-latest
     permissions:
       contents: write

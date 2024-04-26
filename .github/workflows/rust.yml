@@ -49,7 +49,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: taiki-e/install-action@cargo-hack
-    - run: cargo hack check --rust-version --workspace --lib --ignore-private
+    - run: cargo hack --feature-powerset --no-dev-deps --rust-version check --workspace
 
   features:
     name: Features ${{ matrix.toolchain }} ${{ matrix.os }}

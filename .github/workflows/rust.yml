@@ -51,9 +51,7 @@ jobs:
     - uses: taiki-e/install-action@cargo-hack
     - uses: Swatinem/rust-cache@v2
 
-    - run: cargo fetch --locked
-
-    - run: cargo hack --feature-powerset --no-dev-deps --rust-version check --workspace --offline
+    - run: cargo hack --feature-powerset --no-dev-deps --rust-version check --workspace
 
   features:
     name: Features ${{ matrix.toolchain }} ${{ matrix.os }}

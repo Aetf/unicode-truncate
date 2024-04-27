@@ -441,7 +441,7 @@ checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
 
 [[package]]
 name = "unicode-truncate"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "criterion",
  "itertools 0.12.1",

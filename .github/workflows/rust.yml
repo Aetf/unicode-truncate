@@ -53,7 +53,7 @@ jobs:
 
     - run: cargo fetch --locked
 
-    - run: cargo hack --feature-powerset --no-dev-deps --rust-version check --workspace
+    - run: cargo hack --feature-powerset --no-dev-deps --rust-version check --workspace --offline
 
   features:
     name: Features ${{ matrix.toolchain }} ${{ matrix.os }}

@@ -18,7 +18,8 @@ exclude = [
 ]
 
 [dependencies]
-itertools = { version = "0.12.1", default-features = false }
+itertools = { version = "0.12", default-features = false }
+unicode-segmentation = { version = "1", default-features = false }
 unicode-width = "0.1"
 
 [dev-dependencies]
@@ -43,4 +44,3 @@ harness = false
 [profile.bench]
 codegen-units = 1
 lto = true
-

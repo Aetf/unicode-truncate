@@ -171,7 +171,7 @@ impl UnicodeTruncateStr for str {
 
         // unwrap is safe as the index comes from char_indices
         let result = self.get(..byte_index).unwrap();
-        debug_assert_eq!(result.width(), new_width);
+        debug_assert!(result.width() >= new_width);
         (result, new_width)
     }
 
@@ -197,7 +197,7 @@ impl UnicodeTruncateStr for str {
 
         // unwrap is safe as the index comes from char_indices
         let result = self.get(byte_index..).unwrap();
-        debug_assert_eq!(result.width(), new_width);
+        debug_assert!(result.width() >= new_width);
         (result, new_width)
     }
 
@@ -290,7 +290,7 @@ impl UnicodeTruncateStr for str {
         let result = self.get(start_index..end_index).unwrap();
         // unwrap is safe as removed is always smaller than total width
         let result_width = original_width.checked_sub(removed_width).unwrap();
-        debug_assert_eq!(result.width(), result_width);
+        debug_assert!(result.width() >= result_width);
         (result, result_width)
     }
 

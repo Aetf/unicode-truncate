@@ -3,7 +3,7 @@
   "extends": [
     "config:recommended",
     ":automergeMinor",
-    ":group:allNonMajor",
+    "group:allNonMajor"
   ],
   "rangeStrategy": "update-lockfile",
   "automergeStrategy": "squash",

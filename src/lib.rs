@@ -524,6 +524,14 @@ mod tests {
         }
 
         #[test]
+        fn control_char() {
+            use unicode_width::UnicodeWidthChar;
+            assert_eq!("\u{0019}".width(), 1);
+            assert_eq!('\u{0019}'.width(), None);
+            assert_eq!("\u{0019}".unicode_truncate(2), ("\u{0019}", 1));
+        }
+
+        #[test]
         fn family_stays_together() {
             let input = "123👨‍👩‍👧‍👦456";
             assert_eq!(input.unicode_truncate_centered(4), ("", 0));

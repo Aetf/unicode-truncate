@@ -3,7 +3,7 @@
   "extends": [
     "config:recommended",
     ":automergeMinor",
-    ":group:allNonMajor",
+    "group:allNonMajor"
   ],
   "rangeStrategy": "update-lockfile",
   "automergeStrategy": "squash",
@@ -12,12 +12,12 @@
       "automerge": false,
       "matchCurrentVersion": "< 1.0.0",
       "matchUpdateTypes": [
-        "minor",
+        "minor"
       ]
     },
     {
       "matchDepTypes": ["devDependencies"],
       "automerge": true
-    },
-  ],
+    }
+  ]
 }

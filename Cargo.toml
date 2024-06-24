@@ -44,3 +44,5 @@ harness = false
 codegen-units = 1
 lto = true
 
+[profile.test]
+debug-assertions = true

@@ -152,7 +152,9 @@ impl UnicodeTruncateStr for str {
         let (byte_index, new_width) = self
             .char_indices()
             // map to byte index and the width of char start at the index
-            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
+            // control characters treated as of width 1
+            // https://github.com/unicode-rs/unicode-width/pull/45
+            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(1)))
             // chain a final element representing the position past the last char
             .chain(core::iter::once((self.len(), 0)))
             // fold to byte index and the width up to the index
@@ -182,7 +184,9 @@ impl UnicodeTruncateStr for str {
             // instead of start checking from the start do so from the end
             .rev()
             // map to byte index and the width of char start at the index
-            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
+            // control characters treated as of width 1
+            // https://github.com/unicode-rs/unicode-width/pull/45
+            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(1)))
             // skip any position with zero width, the cut won't happen at these points
             // this also helps with not including zero width char at the beginning
             .filter(|&(_, char_width)| char_width > 0)
@@ -223,7 +227,9 @@ impl UnicodeTruncateStr for str {
 
         let from_start = self
             .char_indices()
-            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
+            // control characters treated as of width 1
+            // https://github.com/unicode-rs/unicode-width/pull/45
+            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(1)))
             // skip any position with zero width, the cut won't happen at these points
             // this also helps with removing zero width char at the beginning
             .filter(|&(_, char_width)| char_width > 0)
@@ -242,7 +248,9 @@ impl UnicodeTruncateStr for str {
 
         let from_end = self
             .char_indices()
-            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(0)))
+            // control characters treated as of width 1
+            // https://github.com/unicode-rs/unicode-width/pull/45
+            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(1)))
             // skip any position with zero width, the cut won't happen at these points
             // this also helps with keeping zero width char at the end
             .filter(|&(_, char_width)| char_width > 0)
@@ -510,6 +518,13 @@ mod tests {
                     .unicode_truncate_centered(2),
                 ("b\u{0306}y\u{0306}", 2)
             );
+        }
+
+        #[test]
+        fn control_char() {
+            assert_eq!("\u{0019}".width(), 1);
+            assert_eq!('\u{0019}'.width(), None);
+            assert_eq!("\u{0019}".unicode_truncate(2), ("\u{0019}", 1));
         }
     }
 

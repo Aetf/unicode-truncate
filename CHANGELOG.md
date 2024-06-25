@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0](https://github.com/Aetf/unicode-truncate/compare/v1.0.0...v1.1.0) - 2024-06-25
+
+### Added
+- segment by graphemes ([#11](https://github.com/Aetf/unicode-truncate/pull/11))
+
+### Fixed
+- fixed typos in the `renovate.json` ([#17](https://github.com/Aetf/unicode-truncate/pull/17))
+
+### Other
+- Removed unnessary debug-assertions setting
+- Treat control characters as width 1, fixes [#16](https://github.com/Aetf/unicode-truncate/pull/16) ([#19](https://github.com/Aetf/unicode-truncate/pull/19))
+- tweak renovate configs ([#13](https://github.com/Aetf/unicode-truncate/pull/13))
+
 ## [1.0.0](https://github.com/Aetf/unicode-truncate/compare/v0.2.0...v1.0.0) - 2024-04-26
 
 It's about time for a 1.0 release. This crate has been stable over the years.

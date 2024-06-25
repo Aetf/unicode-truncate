@@ -41,7 +41,8 @@ assert_eq!(str.width(), 5);
 )]
 
 use itertools::{merge_join_by, Either};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 /// Defines the alignment for truncation and padding.
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -150,20 +151,18 @@ impl UnicodeTruncateStr for str {
     #[inline]
     fn unicode_truncate(&self, max_width: usize) -> (&str, usize) {
         let (byte_index, new_width) = self
-            .char_indices()
-            // map to byte index and the width of char start at the index
-            // control characters treated as of width 1
-            // https://github.com/unicode-rs/unicode-width/pull/45
-            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(1)))
+            .grapheme_indices(true)
+            // map to byte index and the width of grapheme at the index
+            .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
             // chain a final element representing the position past the last char
             .chain(core::iter::once((self.len(), 0)))
             // fold to byte index and the width up to the index
-            .scan(0, |sum: &mut usize, (byte_index, char_width)| {
-                // byte_index is the start while the char_width is at the end. Current width is the
-                // sum until now while the next byte_start width is including the current
-                // char_width.
+            .scan(0, |sum: &mut usize, (byte_index, grapheme_width)| {
+                // byte_index is the start while the grapheme_width is at the end. Current width is
+                // the sum until now while the next byte_index is including the current
+                // grapheme_width.
                 let current_width = *sum;
-                *sum = sum.checked_add(char_width)?;
+                *sum = sum.checked_add(grapheme_width)?;
                 Some((byte_index, current_width))
             })
             // take the longest but still shorter than requested
@@ -171,7 +170,7 @@ impl UnicodeTruncateStr for str {
             .last()
             .unwrap_or((0, 0));
 
-        // unwrap is safe as the index comes from char_indices
+        // unwrap is safe as the index comes from grapheme_indices
         let result = self.get(..byte_index).unwrap();
         debug_assert_eq!(result.width(), new_width);
         (result, new_width)
@@ -180,32 +179,26 @@ impl UnicodeTruncateStr for str {
     #[inline]
     fn unicode_truncate_start(&self, max_width: usize) -> (&str, usize) {
         let (byte_index, new_width) = self
-            .char_indices()
+            .grapheme_indices(true)
             // instead of start checking from the start do so from the end
             .rev()
-            // map to byte index and the width of char start at the index
-            // control characters treated as of width 1
-            // https://github.com/unicode-rs/unicode-width/pull/45
-            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(1)))
-            // skip any position with zero width, the cut won't happen at these points
-            // this also helps with not including zero width char at the beginning
-            .filter(|&(_, char_width)| char_width > 0)
+            // map to byte index and the width of grapheme start at the index
+            .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
             // fold to byte index and the width from end to the index
-            .scan(0, |sum: &mut usize, (byte_index, char_width)| {
-                *sum = sum.checked_add(char_width)?;
+            .scan(0, |sum: &mut usize, (byte_index, grapheme_width)| {
+                *sum = sum.checked_add(grapheme_width)?;
                 Some((byte_index, *sum))
             })
             .take_while(|&(_, current_width)| current_width <= max_width)
             .last()
             .unwrap_or((self.len(), 0));
 
-        // unwrap is safe as the index comes from char_indices
+        // unwrap is safe as the index comes from grapheme_indices
         let result = self.get(byte_index..).unwrap();
         debug_assert_eq!(result.width(), new_width);
         (result, new_width)
     }
 
-    #[allow(clippy::collapsible_else_if)]
     #[inline]
     fn unicode_truncate_centered(&self, max_width: usize) -> (&str, usize) {
         if max_width == 0 {
@@ -221,48 +214,40 @@ impl UnicodeTruncateStr for str {
         // unwrap is safe as original_width > max_width
         let min_removal_width = original_width.checked_sub(max_width).unwrap();
 
-        // around the half (min_removal_width - 2) to prevent accidentally removing more than needed
-        // due to char width (max 2)
-        let less_than_half = min_removal_width.saturating_sub(2) / 2;
+        // Around the half to improve performance. In order to ensure the center grapheme stays
+        // remove its max possible length. This assumes a grapheme width is always <= 10 (4 people
+        // family emoji has width 8). This might end up not perfect on graphemes wider than this but
+        // performance is more important here.
+        let less_than_half = min_removal_width.saturating_sub(10) / 2;
 
         let from_start = self
-            .char_indices()
-            // control characters treated as of width 1
-            // https://github.com/unicode-rs/unicode-width/pull/45
-            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(1)))
-            // skip any position with zero width, the cut won't happen at these points
-            // this also helps with removing zero width char at the beginning
-            .filter(|&(_, char_width)| char_width > 0)
+            .grapheme_indices(true)
+            .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
             // fold to byte index and the width from start to the index (not including the current
-            // char width)
+            // grapheme width)
             .scan(
                 (0usize, 0usize),
-                |(sum, prev_width), (byte_index, char_width)| {
+                |(sum, prev_width), (byte_index, grapheme_width)| {
                     *sum = sum.checked_add(*prev_width)?;
-                    *prev_width = char_width;
+                    *prev_width = grapheme_width;
                     Some((byte_index, *sum))
                 },
             )
             // fast forward to around the half
-            .skip_while(|&(_, removed)| min_removal_width > 2 && removed < less_than_half);
+            .skip_while(|&(_, removed)| removed < less_than_half);
 
         let from_end = self
-            .char_indices()
-            // control characters treated as of width 1
-            // https://github.com/unicode-rs/unicode-width/pull/45
-            .map(|(byte_index, char)| (byte_index, char.width().unwrap_or(1)))
-            // skip any position with zero width, the cut won't happen at these points
-            // this also helps with keeping zero width char at the end
-            .filter(|&(_, char_width)| char_width > 0)
+            .grapheme_indices(true)
+            .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
             .rev()
-            // fold to byte index and the width from end to the index (including the current char
-            // width)
-            .scan(0usize, |sum, (byte_index, char_width)| {
-                *sum = sum.checked_add(char_width)?;
+            // fold to byte index and the width from end to the index (including the current
+            // grapheme width)
+            .scan(0usize, |sum, (byte_index, grapheme_width)| {
+                *sum = sum.checked_add(grapheme_width)?;
                 Some((byte_index, *sum))
             })
             // fast forward to around the half
-            .skip_while(|&(_, removed)| min_removal_width > 2 && removed < less_than_half);
+            .skip_while(|&(_, removed)| removed < less_than_half);
 
         let (start_index, end_index, removed_width) = merge_join_by(
             from_start,
@@ -294,7 +279,7 @@ impl UnicodeTruncateStr for str {
         // but a sane default is to remove everything (i.e. min_removal_width too large)
         .unwrap_or((0, 0, original_width));
 
-        // unwrap is safe as the index comes from char_indices
+        // unwrap is safe as the index comes from grapheme_indices
         let result = self.get(start_index..end_index).unwrap();
         // unwrap is safe as removed is always smaller than total width
         let result_width = original_width.checked_sub(removed_width).unwrap();
@@ -396,6 +381,15 @@ mod tests {
                 ("y\u{0306}ey\u{0306}", 3)
             );
         }
+
+        #[test]
+        fn family_stays_together() {
+            let input = "123👨‍👩‍👧‍👦456";
+            assert_eq!(input.unicode_truncate(4), ("123", 3));
+            assert_eq!(input.unicode_truncate(8), ("123", 3));
+            assert_eq!(input.unicode_truncate(12), ("123👨‍👩‍👧‍👦4", 12));
+            assert_eq!(input.unicode_truncate(20), (input, 14));
+        }
     }
 
     mod truncate_start {
@@ -443,6 +437,15 @@ mod tests {
         fn remove_zero_width_char_at_boundary() {
             // zero width character in the middle at the cutting boundary is removed
             assert_eq!("y\u{0306}es".unicode_truncate_start(2), ("es", 2));
+        }
+
+        #[test]
+        fn family_stays_together() {
+            let input = "123👨‍👩‍👧‍👦456";
+            assert_eq!(input.unicode_truncate_start(4), ("456", 3));
+            assert_eq!(input.unicode_truncate_start(8), ("456", 3));
+            assert_eq!(input.unicode_truncate_start(12), ("3👨‍👩‍👧‍👦456", 12));
+            assert_eq!(input.unicode_truncate_start(20), (input, 14));
         }
     }
 
@@ -522,9 +525,19 @@ mod tests {
 
         #[test]
         fn control_char() {
+            use unicode_width::UnicodeWidthChar;
             assert_eq!("\u{0019}".width(), 1);
             assert_eq!('\u{0019}'.width(), None);
             assert_eq!("\u{0019}".unicode_truncate(2), ("\u{0019}", 1));
+        }
+
+        #[test]
+        fn family_stays_together() {
+            let input = "123👨‍👩‍👧‍👦456";
+            assert_eq!(input.unicode_truncate_centered(4), ("", 0));
+            assert_eq!(input.unicode_truncate_centered(8), ("👨‍👩‍👧‍👦", 8));
+            assert_eq!(input.unicode_truncate_centered(12), ("23👨‍👩‍👧‍👦45", 12));
+            assert_eq!(input.unicode_truncate_centered(20), (input, 14));
         }
     }
 

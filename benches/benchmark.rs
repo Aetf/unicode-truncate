@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use criterion::{criterion_group, criterion_main, Criterion, Throughput};
+use criterion::{black_box, criterion_group, criterion_main, Criterion, Throughput};
 use unicode_truncate::UnicodeTruncateStr;
 
 fn roughly_cut(str: &str, size: usize) -> &str {
@@ -26,14 +26,14 @@ fn criterion_benchmark(criterion: &mut Criterion) {
             .throughput(Throughput::Bytes(size as u64));
         let input = roughly_cut(TEXT, size);
         let max_width = input.len() / 2;
-        group.bench_with_input("end", input, |bench, str| {
-            bench.iter(|| str.unicode_truncate(max_width));
+        group.bench_function("end", |bench| {
+            bench.iter(|| black_box(input).unicode_truncate(black_box(max_width)));
         });
-        group.bench_with_input("start", input, |bench, str| {
-            bench.iter(|| str.unicode_truncate_start(max_width));
+        group.bench_function("start", |bench| {
+            bench.iter(|| black_box(input).unicode_truncate_start(black_box(max_width)));
         });
-        group.bench_with_input("centered", input, |bench, str| {
-            bench.iter(|| str.unicode_truncate_centered(max_width));
+        group.bench_function("centered", |bench| {
+            bench.iter(|| black_box(input).unicode_truncate_centered(black_box(max_width)));
         });
         group.finish();
     }

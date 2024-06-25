@@ -19,6 +19,7 @@ exclude = [
 
 [dependencies]
 itertools = { version = "0.12", default-features = false }
+unicode-segmentation = { version = "1", default-features = false }
 unicode-width = "0.1"
 
 [dev-dependencies]

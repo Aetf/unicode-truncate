@@ -385,10 +385,14 @@ mod tests {
         #[test]
         fn family_stays_together() {
             let input = "123👨‍👩‍👧‍👦456";
+
+            // Family emoji should be of width 2
+            assert_eq!("👨‍👩‍👧‍👦".width(), 2);
+
             assert_eq!(input.unicode_truncate(4), ("123", 3));
-            assert_eq!(input.unicode_truncate(8), ("123", 3));
-            assert_eq!(input.unicode_truncate(12), ("123👨‍👩‍👧‍👦4", 12));
-            assert_eq!(input.unicode_truncate(20), (input, 14));
+            assert_eq!(input.unicode_truncate(5), ("123👨‍👩‍👧‍👦", 5));
+            assert_eq!(input.unicode_truncate(6), ("123👨‍👩‍👧‍👦4", 6));
+            assert_eq!(input.unicode_truncate(20), (input, 8));
         }
     }
 
@@ -442,10 +446,14 @@ mod tests {
         #[test]
         fn family_stays_together() {
             let input = "123👨‍👩‍👧‍👦456";
+
+            // Family emoji should be of width 2
+            assert_eq!("👨‍👩‍👧‍👦".width(), 2);
+
             assert_eq!(input.unicode_truncate_start(4), ("456", 3));
-            assert_eq!(input.unicode_truncate_start(8), ("456", 3));
-            assert_eq!(input.unicode_truncate_start(12), ("3👨‍👩‍👧‍👦456", 12));
-            assert_eq!(input.unicode_truncate_start(20), (input, 14));
+            assert_eq!(input.unicode_truncate_start(5), ("👨‍👩‍👧‍👦456", 5));
+            assert_eq!(input.unicode_truncate_start(6), ("3👨‍👩‍👧‍👦456", 6));
+            assert_eq!(input.unicode_truncate_start(20), (input, 8));
         }
     }
 
@@ -534,10 +542,15 @@ mod tests {
         #[test]
         fn family_stays_together() {
             let input = "123👨‍👩‍👧‍👦456";
-            assert_eq!(input.unicode_truncate_centered(4), ("", 0));
-            assert_eq!(input.unicode_truncate_centered(8), ("👨‍👩‍👧‍👦", 8));
-            assert_eq!(input.unicode_truncate_centered(12), ("23👨‍👩‍👧‍👦45", 12));
-            assert_eq!(input.unicode_truncate_centered(20), (input, 14));
+
+            // Family emoji should be of width 2
+            assert_eq!("👨‍👩‍👧‍👦".width(), 2);
+
+            assert_eq!(input.unicode_truncate_centered(1), ("", 0));
+            assert_eq!(input.unicode_truncate_centered(2), ("👨‍👩‍👧‍👦", 2));
+            assert_eq!(input.unicode_truncate_centered(4), ("3👨‍👩‍👧‍👦4", 4));
+            assert_eq!(input.unicode_truncate_centered(6), ("23👨‍👩‍👧‍👦45", 6));
+            assert_eq!(input.unicode_truncate_centered(20), (input, 8));
         }
     }
 

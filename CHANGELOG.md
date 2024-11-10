@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0](https://github.com/Aetf/unicode-truncate/compare/v1.1.0...v2.0.0) - 2024-11-10
+
+### Fixed
+
+- *(deps)* update rust crate unicode-width to 0.2
+
+### Other
+
+- make release-plz use github app token
+- [**breaking**] bump MSRV to 1.66
+
 ## [1.1.0](https://github.com/Aetf/unicode-truncate/compare/v1.0.0...v1.1.0) - 2024-07-08
 
 ### Added

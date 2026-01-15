@@ -38,3 +38,8 @@ fn main() {
 `unicode-truncate` can be built without `std` by disabling the default feature `std`. However, in
 that case `unicode_truncate::UnicodeTruncateStr::unicode_pad` won't be available because it depends
 on `std::string::String` and `std::borrow::Cow`.
+
+## Compatibility
+
+The Minimum Supported Rust Version (MSRV) is specified in the `rust-version` field of `Cargo.toml`.
+This version requirement applies only to using the library. Development workflows (such as running benchmarks) require a more recent Rust toolchain, primarily to satisfy the stricter MSRV of dev-dependencies like `criterion`.

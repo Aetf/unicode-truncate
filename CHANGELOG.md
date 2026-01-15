@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1](https://github.com/Aetf/unicode-truncate/compare/v2.0.0...v2.0.1) - 2026-01-15
+
+### Fixed
+
+- *(deps)* update criterion to 0.8
+- *(deps)* update itertools to 0.14
+
+### Other
+
+- update README.md
+- *(deps)* update actions/create-github-app-token action to v2
+- *(deps)* update actions/checkout action to v6
+
 ## [2.0.0](https://github.com/Aetf/unicode-truncate/compare/v1.1.0...v2.0.0) - 2024-11-10
 
 ### Fixed

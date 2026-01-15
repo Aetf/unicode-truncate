@@ -18,7 +18,7 @@ exclude = [
 ]
 
 [dependencies]
-itertools = { version = "0.13", default-features = false }
+itertools = { version = "0.14", default-features = false }
 unicode-segmentation = { version = "1", default-features = false }
 unicode-width = "0.2"
 

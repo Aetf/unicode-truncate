@@ -3,7 +3,7 @@ name = "unicode-truncate"
 version = "2.0.1"
 authors = ["Aetf <aetf@unlimitedcodeworks.xyz>"]
 edition = "2018"
-rust-version = "1.66"
+rust-version = "1.85"
 
 homepage = "https://github.com/Aetf/unicode-truncate"
 repository = "https://github.com/Aetf/unicode-truncate"

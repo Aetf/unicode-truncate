@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0](https://github.com/Aetf/unicode-truncate/compare/v2.0.1...v3.0.0) - 2026-08-20
+
+### Fixed
+
+- *(deps)* update all non-major dependencies
+
+### Other
+
+- publish to crates.io via trusted publishing
+- [**breaking**] bump MSRV to 1.85
+- *(deps)* update actions/checkout action to v7
+- *(deps)* update actions/create-github-app-token action to v3
+
 ## [2.0.1](https://github.com/Aetf/unicode-truncate/compare/v2.0.0...v2.0.1) - 2026-01-15
 
 ### Fixed

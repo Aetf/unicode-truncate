@@ -66,8 +66,10 @@
 //! ## Known limitation
 //!
 //! A few ligatures, such as the Arabic lam-alef, span grapheme clusters and render narrower than
-//! their parts. For a string containing one, its width is less than the sum of the widths of its
-//! graphemes, and the width returned alongside the truncated slice is then too large.
+//! their parts, so the width of a string containing one is less than the sum of the widths of its
+//! graphemes. Candidates are measured by that sum, which makes truncation conservative on such
+//! strings: what is returned can be narrower than what would have fit. The width returned
+//! alongside it is always the width of the returned slice.
 //!
 //! # Examples
 //! Safely truncate string to display width even not at character boundaries.
@@ -299,7 +301,7 @@ fn grow_window<'a, I>(
 impl UnicodeTruncateStr for str {
     #[inline]
     fn unicode_truncate(&self, max_width: usize) -> (&str, usize) {
-        let (byte_index, new_width) = grapheme_boundaries(self)
+        let (byte_index, _) = grapheme_boundaries(self)
             // take the longest but still shorter than requested
             .take_while(|&(_, current_width)| current_width <= max_width)
             .last()
@@ -307,13 +309,16 @@ impl UnicodeTruncateStr for str {
 
         // unwrap is safe as the index comes from grapheme_indices
         let result = self.get(..byte_index).unwrap();
-        debug_assert_eq!(result.width(), new_width);
-        (result, new_width)
+        // the sum of the grapheme widths the cut was made on is an upper bound of the width of
+        // the result, so measure the result itself rather than reporting that sum
+        let result_width = result.width();
+        debug_assert!(result_width <= max_width);
+        (result, result_width)
     }
 
     #[inline]
     fn unicode_truncate_start(&self, max_width: usize) -> (&str, usize) {
-        let (byte_index, new_width) = self
+        let (byte_index, _) = self
             .grapheme_indices(true)
             // instead of start checking from the start do so from the end
             .rev()
@@ -330,8 +335,9 @@ impl UnicodeTruncateStr for str {
 
         // unwrap is safe as the index comes from grapheme_indices
         let result = self.get(byte_index..).unwrap();
-        debug_assert_eq!(result.width(), new_width);
-        (result, new_width)
+        let result_width = result.width();
+        debug_assert!(result_width <= max_width);
+        (result, result_width)
     }
 
     #[inline]
@@ -458,8 +464,9 @@ impl UnicodeTruncateStr for str {
         // unwrap is safe as both indices come from grapheme_indices and the window is never
         // reversed
         let result = self.get(best.start..best.end).unwrap();
-        debug_assert_eq!(result.width(), best.kept);
-        (result, best.kept)
+        let result_width = result.width();
+        debug_assert!(result_width <= max_width);
+        (result, result_width)
     }
 
     #[cfg(feature = "std")]
@@ -843,6 +850,58 @@ mod tests {
                     input,
                     max_width
                 );
+            }
+        }
+    }
+
+    /// A few ligatures span grapheme clusters and render narrower than their parts, so the width
+    /// of the string is not the sum of the widths of its graphemes.
+    mod cross_grapheme_ligature {
+        use super::*;
+
+        /// Arabic lam followed by alef, which renders as a single ligature one column wide
+        const LAM_ALEF: &str = "\u{0644}\u{0627}";
+        /// The same pair eight times over
+        const LAM_ALEFS: &str = "\u{0644}\u{0627}\u{0644}\u{0627}\u{0644}\u{0627}\u{0644}\u{0627}\u{0644}\u{0627}\u{0644}\u{0627}\u{0644}\u{0627}\u{0644}\u{0627}";
+
+        #[test]
+        fn width_differs_from_the_sum_of_its_graphemes() {
+            assert_eq!(LAM_ALEF.width(), 1);
+            assert_eq!(
+                LAM_ALEF.graphemes(true).map(|g| g.width()).sum::<usize>(),
+                2
+            );
+            assert_eq!(LAM_ALEFS.width(), 8);
+            assert_eq!(
+                LAM_ALEFS.graphemes(true).map(|g| g.width()).sum::<usize>(),
+                16
+            );
+        }
+
+        #[test]
+        fn reported_width_is_the_width_of_the_result() {
+            for input in [LAM_ALEF, LAM_ALEFS] {
+                for max_width in 0..10 {
+                    for (result, width) in [
+                        input.unicode_truncate(max_width),
+                        input.unicode_truncate_start(max_width),
+                        input.unicode_truncate_centered(max_width),
+                    ] {
+                        assert_eq!(result.width(), width, "{input:?} at {max_width}");
+                        assert!(width <= max_width, "{:?} at {}", input, max_width);
+                    }
+                }
+            }
+        }
+
+        #[cfg(feature = "std")]
+        #[test]
+        fn padding_reaches_the_target_width() {
+            for align in [Alignment::Left, Alignment::Center, Alignment::Right] {
+                for target_width in 0..10 {
+                    let padded = LAM_ALEFS.unicode_pad(target_width, align, true);
+                    assert_eq!(padded.width(), target_width, "{align:?} at {target_width}");
+                }
             }
         }
     }

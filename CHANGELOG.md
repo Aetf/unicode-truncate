@@ -6,6 +6,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0](https://github.com/Aetf/unicode-truncate/compare/v3.0.0...v3.1.0) - 2026-08-21
+
+### Added
+
+- add unicode_pad_aligned
+- *(centered)* return the best window, not the first one that fits
+
+### Fixed
+
+- report the width of the returned slice, not a sum of graphemes
+
+### Other
+
+- give the grapheme machinery its own module
+- skip runs of ASCII when measuring width too
+- short circuit runs of ASCII when walking graphemes
+- widen the differential fuzz to flags, controls and ligatures
+- *(centered)* fold the width sum into the balance walk
+- cover more scripts and both truncation regimes
+
 ## [3.0.0](https://github.com/Aetf/unicode-truncate/compare/v2.0.1...v3.0.0) - 2026-08-20
 
 ### Fixed

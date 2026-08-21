@@ -96,6 +96,7 @@ assert_eq!(str.width(), 5);
 )]
 
 use core::cmp::Reverse;
+use core::convert::TryInto;
 
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -248,6 +249,47 @@ impl Grapheme {
 #[inline]
 fn is_ascii_cluster(bytes: &[u8], index: usize) -> bool {
     matches!(bytes[index], 0x20..=0x7E) && bytes.get(index.wrapping_add(1)).is_none_or(u8::is_ascii)
+}
+
+/// The display width of a string, equal to [`width`](UnicodeWidthStr::width) but skipping over
+/// runs of ASCII. The cut points are the bytes passing [`is_ascii_cluster`]: the width state
+/// machine reaches such a byte in its default state, as every state a following ASCII byte can
+/// produce is one no printable ASCII byte reacts to, so the total width is the sum over the
+/// pieces. This makes the same positions the provable reset points of both segmentation and
+/// width measurement.
+#[inline]
+fn measure_width(text: &str) -> usize {
+    let bytes = text.as_bytes();
+    let mut width = 0usize;
+    let mut pos = 0usize;
+    while pos < bytes.len() {
+        if is_ascii_cluster(bytes, pos) {
+            width = width.saturating_add(1);
+            pos = pos.saturating_add(1);
+        } else {
+            let start = pos;
+            pos = pos.saturating_add(1);
+            loop {
+                // every byte of a multi byte character has its high bit set, so a whole word of
+                // such bytes cannot contain a cut point and is skipped in one comparison
+                if let Some(chunk) = bytes.get(pos..pos.saturating_add(8)) {
+                    // unwrap is safe as the chunk is exactly eight bytes
+                    let word = u64::from_ne_bytes(chunk.try_into().unwrap());
+                    if word & 0x8080_8080_8080_8080 == 0x8080_8080_8080_8080 {
+                        pos = pos.saturating_add(8);
+                        continue;
+                    }
+                }
+                if pos >= bytes.len() || is_ascii_cluster(bytes, pos) {
+                    break;
+                }
+                pos = pos.saturating_add(1);
+            }
+            // unwrap is safe as both positions sit on ASCII bytes or the ends of the string
+            width = width.saturating_add(text.get(start..pos).unwrap().width());
+        }
+    }
+    width
 }
 
 /// Iterates over the grapheme clusters of a string like
@@ -489,11 +531,11 @@ impl UnicodeTruncateStr for str {
             .last()
             .unwrap_or((0, 0));
 
-        // unwrap is safe as the index comes from grapheme_indices
+        // unwrap is safe as the index is a cluster boundary
         let result = self.get(..byte_index).unwrap();
         // the sum of the grapheme widths the cut was made on is an upper bound of the width of
         // the result, so measure the result itself rather than reporting that sum
-        let result_width = result.width();
+        let result_width = measure_width(result);
         debug_assert!(result_width <= max_width);
         (result, result_width)
     }
@@ -511,9 +553,9 @@ impl UnicodeTruncateStr for str {
             .last()
             .unwrap_or((self.len(), 0));
 
-        // unwrap is safe as the index comes from grapheme_indices
+        // unwrap is safe as the index is a cluster boundary
         let result = self.get(byte_index..).unwrap();
-        let result_width = result.width();
+        let result_width = measure_width(result);
         debug_assert!(result_width <= max_width);
         (result, result_width)
     }
@@ -524,7 +566,7 @@ impl UnicodeTruncateStr for str {
             return ("", 0);
         }
 
-        let original_width = self.width();
+        let original_width = measure_width(self);
         if original_width <= max_width {
             return (self, original_width);
         }
@@ -632,10 +674,10 @@ impl UnicodeTruncateStr for str {
             }
         }
 
-        // unwrap is safe as both indices come from grapheme_indices and the window is never
+        // unwrap is safe as both indices are cluster boundaries and the window is never
         // reversed
         let result = self.get(best.start..best.end).unwrap();
-        let result_width = result.width();
+        let result_width = measure_width(result);
         debug_assert!(result_width <= max_width);
         (result, result_width)
     }
@@ -650,7 +692,7 @@ impl UnicodeTruncateStr for str {
     ) -> std::borrow::Cow<'_, str> {
         use std::borrow::Cow;
 
-        if !truncate && self.width() >= target_width {
+        if !truncate && measure_width(self) >= target_width {
             return Cow::Borrowed(self);
         }
 
@@ -1007,6 +1049,7 @@ mod tests {
             let input: String = (0..len)
                 .map(|_| alphabet[random() as usize % alphabet.len()])
                 .collect();
+            assert_eq!(measure_width(&input), input.width(), "{input:?}");
             for max_width in 0..8 {
                 let actual = input.unicode_truncate_centered(max_width);
                 assert_eq!(

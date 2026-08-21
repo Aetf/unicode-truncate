@@ -270,32 +270,62 @@ impl Window {
     }
 }
 
-/// Grows `window` towards the end of the string as far as `max_width` allows, taking graphemes
-/// from `graphemes`, which yields byte indices relative to `base`.
+/// Grows `window` by one grapheme towards the end of the string if that still fits in
+/// `max_width`, taking it from `graphemes`, which yields byte indices relative to `base`.
 #[inline]
-fn grow_window<'a, I>(
+fn try_grow_end<'a, I>(
     window: &mut Window,
     graphemes: &mut core::iter::Peekable<I>,
     base: usize,
     max_width: usize,
-) where
+) -> bool
+where
     I: Iterator<Item = (usize, &'a str)>,
 {
-    while let Some(&(byte_index, grapheme)) = graphemes.peek() {
-        let width = grapheme.width();
-        let Some(grown) = window.kept.checked_add(width) else {
-            break;
-        };
-        if grown > max_width {
-            break;
-        }
-        window.kept = grown;
-        window.removed_end = window.removed_end.saturating_sub(width);
-        window.end = base
-            .saturating_add(byte_index)
-            .saturating_add(grapheme.len());
-        graphemes.next();
+    let Some(&(byte_index, grapheme)) = graphemes.peek() else {
+        return false;
+    };
+    let Some(grown) = window.kept.checked_add(grapheme.width()) else {
+        return false;
+    };
+    if grown > max_width {
+        return false;
     }
+    window.kept = grown;
+    window.removed_end = window.removed_end.saturating_sub(grapheme.width());
+    window.end = base
+        .saturating_add(byte_index)
+        .saturating_add(grapheme.len());
+    graphemes.next();
+    true
+}
+
+/// Grows `window` by one grapheme towards the start of the string if that still fits in
+/// `max_width`, taking it from `graphemes`, which walks backwards and yields absolute byte
+/// indices.
+#[inline]
+fn try_grow_start<'a, I>(
+    window: &mut Window,
+    graphemes: &mut core::iter::Peekable<I>,
+    max_width: usize,
+) -> bool
+where
+    I: Iterator<Item = (usize, &'a str)>,
+{
+    let Some(&(byte_index, grapheme)) = graphemes.peek() else {
+        return false;
+    };
+    let Some(grown) = window.kept.checked_add(grapheme.width()) else {
+        return false;
+    };
+    if grown > max_width {
+        return false;
+    }
+    window.kept = grown;
+    window.removed_start = window.removed_start.saturating_sub(grapheme.width());
+    window.start = byte_index;
+    graphemes.next();
+    true
 }
 
 impl UnicodeTruncateStr for str {
@@ -351,53 +381,63 @@ impl UnicodeTruncateStr for str {
             return (self, original_width);
         }
 
-        // The window is scored against the sum of the widths of the graphemes, which is not always
-        // the width of the whole string, so it has to be summed up separately. Once the two agree
-        // this pass can go away and `original_width` can be used instead.
-        // unwrap is safe as grapheme_boundaries always yields the position past the last grapheme
-        let (_, summed_width) = grapheme_boundaries(self).last().unwrap();
-
-        // Four cursors, each walking away from the anchor found below and never backtracking:
-        // `starts`/`ends` shrink the window during the search for the anchor and keep going for
-        // the pass towards the end resp. the start.
-        let mut starts = self.grapheme_indices(true);
-        let mut ends = self.grapheme_indices(true).rev();
-
-        // Shrink the window from both ends, always giving up on the side that gave up less so far,
-        // until it fits. `kept > max_width` implies the window is not empty, so the two cursors can
-        // never pass each other.
-        let mut anchor = Window {
+        // The search scores windows by the sum of the widths of their graphemes, which is not
+        // always the width of the whole string, so the sum has to come from walking the graphemes.
+        // Rather than summing in a separate pass, walk in from both ends, always advancing the
+        // side that removed less: when the cursors meet, every grapheme was visited exactly once,
+        // the sum is the two removals combined, and the meeting point splits it most evenly. Both
+        // byte positions are grapheme boundaries of the same segmentation, so while they differ
+        // the next grapheme at the front ends at or before the back one.
+        let mut front = self.grapheme_indices(true);
+        let mut back = self.grapheme_indices(true).rev();
+        let mut meet = Window {
             start: 0,
             end: self.len(),
             removed_start: 0,
             removed_end: 0,
-            kept: summed_width,
+            kept: 0,
         };
-        while anchor.kept > max_width {
-            if anchor.removed_start <= anchor.removed_end {
-                // unwrap is safe as the window is not empty
-                let (byte_index, grapheme) = starts.next().unwrap();
-                let width = grapheme.width();
-                anchor.start = byte_index.saturating_add(grapheme.len());
-                anchor.removed_start = anchor.removed_start.saturating_add(width);
-                anchor.kept = anchor.kept.saturating_sub(width);
+        while meet.start < meet.end {
+            if meet.removed_start <= meet.removed_end {
+                // unwrap is safe as the cursors have not met
+                let (byte_index, grapheme) = front.next().unwrap();
+                meet.start = byte_index.saturating_add(grapheme.len());
+                meet.removed_start = meet.removed_start.saturating_add(grapheme.width());
             } else {
-                // unwrap is safe as the window is not empty
-                let (byte_index, grapheme) = ends.next().unwrap();
-                anchor.end = byte_index;
-                anchor.removed_end = anchor.removed_end.saturating_add(grapheme.width());
-                anchor.kept = anchor.kept.saturating_sub(grapheme.width());
+                // unwrap is safe as the cursors have not met
+                let (byte_index, grapheme) = back.next().unwrap();
+                meet.end = byte_index;
+                meet.removed_end = meet.removed_end.saturating_add(grapheme.width());
             }
         }
 
-        // The cursor used to grow the window towards the end of the string.
+        // Grow the empty window at the meeting point back out as far as `max_width` allows,
+        // preferring the side that removed more so the anchor stays balanced. A grapheme that
+        // does not fit on one side does not end the growth on the other.
+        let mut anchor = meet;
+        let mut grow_start = self
+            .get(..meet.start)
+            .unwrap_or_default()
+            .grapheme_indices(true)
+            .rev()
+            .peekable();
         let mut grow_end = self
-            .get(anchor.end..)
+            .get(meet.end..)
             .unwrap_or_default()
             .grapheme_indices(true)
             .peekable();
-        let base = anchor.end;
-        grow_window(&mut anchor, &mut grow_end, base, max_width);
+        loop {
+            let grown = if anchor.removed_start >= anchor.removed_end {
+                try_grow_start(&mut anchor, &mut grow_start, max_width)
+                    || try_grow_end(&mut anchor, &mut grow_end, meet.end, max_width)
+            } else {
+                try_grow_end(&mut anchor, &mut grow_end, meet.end, max_width)
+                    || try_grow_start(&mut anchor, &mut grow_start, max_width)
+            };
+            if !grown {
+                break;
+            }
+        }
 
         let mut best = anchor;
 
@@ -405,9 +445,16 @@ impl UnicodeTruncateStr for str {
         // most balanced window, and the penalty is never smaller than it, so the first window that
         // is more off center than the best one is worth cannot be followed by a better one.
         let mut current = anchor;
-        for (byte_index, grapheme) in starts {
+        let removals = self
+            .get(anchor.start..)
+            .unwrap_or_default()
+            .grapheme_indices(true);
+        for (byte_index, grapheme) in removals {
             let width = grapheme.width();
-            current.start = byte_index.saturating_add(grapheme.len());
+            current.start = anchor
+                .start
+                .saturating_add(byte_index)
+                .saturating_add(grapheme.len());
             current.removed_start = current.removed_start.saturating_add(width);
             if current.start > current.end {
                 // the window was empty and this grapheme is wider than the budget, so it moves
@@ -418,7 +465,7 @@ impl UnicodeTruncateStr for str {
             } else {
                 current.kept = current.kept.saturating_sub(width);
             }
-            grow_window(&mut current, &mut grow_end, base, max_width);
+            while try_grow_end(&mut current, &mut grow_end, meet.end, max_width) {}
             if current.off_center() > best.penalty(max_width) {
                 break;
             }
@@ -428,14 +475,8 @@ impl UnicodeTruncateStr for str {
         }
 
         // Slide the window towards the start of the string, shrinking it from the end whenever it
-        // no longer fits.
+        // no longer fits. `grow_start` kept its position from growing the anchor.
         let mut current = anchor;
-        let grow_start = self
-            .get(..anchor.start)
-            .unwrap_or_default()
-            .grapheme_indices(true)
-            .rev();
-        // `ends` stopped before the window was grown to its final size, so it cannot be reused
         let mut shrink_end = self
             .get(..anchor.end)
             .unwrap_or_default()

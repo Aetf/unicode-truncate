@@ -211,8 +211,8 @@ pub trait UnicodeTruncateStr {
 /// yielding the byte index of the boundary and the display width of the string before it.
 #[inline]
 fn grapheme_boundaries(s: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
-    s.grapheme_indices(true)
-        .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
+    Graphemes::new(s)
+        .map(|cluster| (cluster.start, cluster.width))
         // chain a final element representing the position past the last grapheme
         .chain(core::iter::once((s.len(), 0)))
         .scan(0usize, |sum, (byte_index, grapheme_width)| {
@@ -223,6 +223,168 @@ fn grapheme_boundaries(s: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
             *sum = sum.checked_add(grapheme_width)?;
             Some((byte_index, current_width))
         })
+}
+
+/// A grapheme cluster as the truncation scans walk over it: where it starts, how many bytes it
+/// takes and how many columns it occupies.
+#[derive(Clone, Copy)]
+struct Grapheme {
+    start: usize,
+    len: usize,
+    width: usize,
+}
+
+impl Grapheme {
+    #[inline]
+    fn end(&self) -> usize {
+        self.start.saturating_add(self.len)
+    }
+}
+
+/// Whether the byte at `index` is a complete grapheme cluster on its own, decidable from one
+/// neighboring byte: a printable ASCII byte breaks from any ASCII byte after it (GB4, GB5 and
+/// GB999, and it cannot be the CR of a CR LF pair), and every non-ASCII combining character,
+/// joiner or modifier starts with a non-ASCII byte.
+#[inline]
+fn is_ascii_cluster(bytes: &[u8], index: usize) -> bool {
+    matches!(bytes[index], 0x20..=0x7E) && bytes.get(index.wrapping_add(1)).is_none_or(u8::is_ascii)
+}
+
+/// Iterates over the grapheme clusters of a string like
+/// [`grapheme_indices`](UnicodeSegmentation::grapheme_indices), but yields each cluster with its
+/// width, and short circuits runs of ASCII: a cluster passing [`is_ascii_cluster`] needs neither
+/// segmentation nor a width lookup. Other text is delegated to a real segmenter, which is entered
+/// and left only at cluster boundaries next to ASCII, where segmenting the rest of the string in
+/// isolation provably matches segmenting the whole.
+struct Graphemes<'a> {
+    text: &'a str,
+    /// The boundary the next cluster starts at.
+    pos: usize,
+    /// The segmenter for the current run of non-ASCII text and the offset it counts from.
+    inner: Option<(usize, unicode_segmentation::GraphemeIndices<'a>)>,
+}
+
+impl<'a> Graphemes<'a> {
+    #[inline]
+    fn new(text: &'a str) -> Self {
+        Self::starting_at(text, 0)
+    }
+
+    /// Starts walking at `pos`, which must be a cluster boundary of `text`.
+    #[inline]
+    fn starting_at(text: &'a str, pos: usize) -> Self {
+        Graphemes {
+            text,
+            pos,
+            inner: None,
+        }
+    }
+}
+
+impl Iterator for Graphemes<'_> {
+    type Item = Grapheme;
+
+    #[inline]
+    fn next(&mut self) -> Option<Grapheme> {
+        let bytes = self.text.as_bytes();
+        if self.pos >= bytes.len() {
+            return None;
+        }
+        if is_ascii_cluster(bytes, self.pos) {
+            self.inner = None;
+            let cluster = Grapheme {
+                start: self.pos,
+                len: 1,
+                width: 1,
+            };
+            self.pos = self.pos.saturating_add(1);
+            return Some(cluster);
+        }
+        if self.inner.is_none() {
+            // unwrap is safe as pos is a cluster boundary
+            let rest = self.text.get(self.pos..).unwrap();
+            self.inner = Some((self.pos, rest.grapheme_indices(true)));
+        }
+        // unwrap is safe as it was just filled in
+        let (base, segmenter) = self.inner.as_mut().unwrap();
+        // unwrap is safe as pos is not past the end
+        let (index, grapheme) = segmenter.next().unwrap();
+        let cluster = Grapheme {
+            start: base.saturating_add(index),
+            len: grapheme.len(),
+            width: grapheme.width(),
+        };
+        self.pos = cluster.end();
+        Some(cluster)
+    }
+}
+
+/// The backwards counterpart of [`Graphemes`].
+struct GraphemesRev<'a> {
+    text: &'a str,
+    /// The boundary the next cluster ends at.
+    pos: usize,
+    /// The segmenter for the current run of non-ASCII text; it works on a prefix of the string,
+    /// so its indices need no offset.
+    inner: Option<unicode_segmentation::GraphemeIndices<'a>>,
+}
+
+impl<'a> GraphemesRev<'a> {
+    #[inline]
+    fn new(text: &'a str) -> Self {
+        Self::ending_at(text, text.len())
+    }
+
+    /// Starts walking backwards from `pos`, which must be a cluster boundary of `text`.
+    #[inline]
+    fn ending_at(text: &'a str, pos: usize) -> Self {
+        GraphemesRev {
+            text,
+            pos,
+            inner: None,
+        }
+    }
+}
+
+impl Iterator for GraphemesRev<'_> {
+    type Item = Grapheme;
+
+    #[inline]
+    fn next(&mut self) -> Option<Grapheme> {
+        let bytes = self.text.as_bytes();
+        if self.pos == 0 {
+            return None;
+        }
+        let previous = self.pos.saturating_sub(1);
+        if matches!(bytes[previous], 0x20..=0x7E)
+            && (previous == 0 || bytes[previous.saturating_sub(1)].is_ascii())
+        {
+            // the mirror image of is_ascii_cluster: a printable ASCII byte also breaks from any
+            // ASCII byte before it
+            self.inner = None;
+            self.pos = previous;
+            return Some(Grapheme {
+                start: previous,
+                len: 1,
+                width: 1,
+            });
+        }
+        if self.inner.is_none() {
+            // unwrap is safe as pos is a cluster boundary
+            let rest = self.text.get(..self.pos).unwrap();
+            self.inner = Some(rest.grapheme_indices(true));
+        }
+        // unwrap is safe as it was just filled in
+        let segmenter = self.inner.as_mut().unwrap();
+        // unwrap is safe as pos is not zero
+        let (index, grapheme) = segmenter.next_back().unwrap();
+        self.pos = index;
+        Some(Grapheme {
+            start: index,
+            len: grapheme.len(),
+            width: grapheme.width(),
+        })
+    }
 }
 
 /// A candidate result of a centered truncation: the byte range that would be kept, together with
@@ -271,59 +433,49 @@ impl Window {
 }
 
 /// Grows `window` by one grapheme towards the end of the string if that still fits in
-/// `max_width`, taking it from `graphemes`, which yields byte indices relative to `base`.
+/// `max_width`, taking it from `graphemes`.
 #[inline]
-fn try_grow_end<'a, I>(
+fn try_grow_end(
     window: &mut Window,
-    graphemes: &mut core::iter::Peekable<I>,
-    base: usize,
+    graphemes: &mut core::iter::Peekable<Graphemes<'_>>,
     max_width: usize,
-) -> bool
-where
-    I: Iterator<Item = (usize, &'a str)>,
-{
-    let Some(&(byte_index, grapheme)) = graphemes.peek() else {
+) -> bool {
+    let Some(&cluster) = graphemes.peek() else {
         return false;
     };
-    let Some(grown) = window.kept.checked_add(grapheme.width()) else {
+    let Some(grown) = window.kept.checked_add(cluster.width) else {
         return false;
     };
     if grown > max_width {
         return false;
     }
     window.kept = grown;
-    window.removed_end = window.removed_end.saturating_sub(grapheme.width());
-    window.end = base
-        .saturating_add(byte_index)
-        .saturating_add(grapheme.len());
+    window.removed_end = window.removed_end.saturating_sub(cluster.width);
+    window.end = cluster.end();
     graphemes.next();
     true
 }
 
 /// Grows `window` by one grapheme towards the start of the string if that still fits in
-/// `max_width`, taking it from `graphemes`, which walks backwards and yields absolute byte
-/// indices.
+/// `max_width`, taking it from `graphemes`, which walks backwards.
 #[inline]
-fn try_grow_start<'a, I>(
+fn try_grow_start(
     window: &mut Window,
-    graphemes: &mut core::iter::Peekable<I>,
+    graphemes: &mut core::iter::Peekable<GraphemesRev<'_>>,
     max_width: usize,
-) -> bool
-where
-    I: Iterator<Item = (usize, &'a str)>,
-{
-    let Some(&(byte_index, grapheme)) = graphemes.peek() else {
+) -> bool {
+    let Some(&cluster) = graphemes.peek() else {
         return false;
     };
-    let Some(grown) = window.kept.checked_add(grapheme.width()) else {
+    let Some(grown) = window.kept.checked_add(cluster.width) else {
         return false;
     };
     if grown > max_width {
         return false;
     }
     window.kept = grown;
-    window.removed_start = window.removed_start.saturating_sub(grapheme.width());
-    window.start = byte_index;
+    window.removed_start = window.removed_start.saturating_sub(cluster.width);
+    window.start = cluster.start;
     graphemes.next();
     true
 }
@@ -348,16 +500,12 @@ impl UnicodeTruncateStr for str {
 
     #[inline]
     fn unicode_truncate_start(&self, max_width: usize) -> (&str, usize) {
-        let (byte_index, _) = self
-            .grapheme_indices(true)
-            // instead of start checking from the start do so from the end
-            .rev()
-            // map to byte index and the width of grapheme start at the index
-            .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
+        // walk from the end instead of from the start
+        let (byte_index, _) = GraphemesRev::new(self)
             // fold to byte index and the width from end to the index
-            .scan(0, |sum: &mut usize, (byte_index, grapheme_width)| {
-                *sum = sum.checked_add(grapheme_width)?;
-                Some((byte_index, *sum))
+            .scan(0, |sum: &mut usize, cluster| {
+                *sum = sum.checked_add(cluster.width)?;
+                Some((cluster.start, *sum))
             })
             .take_while(|&(_, current_width)| current_width <= max_width)
             .last()
@@ -388,8 +536,8 @@ impl UnicodeTruncateStr for str {
         // the sum is the two removals combined, and the meeting point splits it most evenly. Both
         // byte positions are grapheme boundaries of the same segmentation, so while they differ
         // the next grapheme at the front ends at or before the back one.
-        let mut front = self.grapheme_indices(true);
-        let mut back = self.grapheme_indices(true).rev();
+        let mut front = Graphemes::new(self);
+        let mut back = GraphemesRev::new(self);
         let mut meet = Window {
             start: 0,
             end: self.len(),
@@ -400,14 +548,14 @@ impl UnicodeTruncateStr for str {
         while meet.start < meet.end {
             if meet.removed_start <= meet.removed_end {
                 // unwrap is safe as the cursors have not met
-                let (byte_index, grapheme) = front.next().unwrap();
-                meet.start = byte_index.saturating_add(grapheme.len());
-                meet.removed_start = meet.removed_start.saturating_add(grapheme.width());
+                let cluster = front.next().unwrap();
+                meet.start = cluster.end();
+                meet.removed_start = meet.removed_start.saturating_add(cluster.width);
             } else {
                 // unwrap is safe as the cursors have not met
-                let (byte_index, grapheme) = back.next().unwrap();
-                meet.end = byte_index;
-                meet.removed_end = meet.removed_end.saturating_add(grapheme.width());
+                let cluster = back.next().unwrap();
+                meet.end = cluster.start;
+                meet.removed_end = meet.removed_end.saturating_add(cluster.width);
             }
         }
 
@@ -415,23 +563,17 @@ impl UnicodeTruncateStr for str {
         // preferring the side that removed more so the anchor stays balanced. A grapheme that
         // does not fit on one side does not end the growth on the other.
         let mut anchor = meet;
-        let mut grow_start = self
-            .get(..meet.start)
-            .unwrap_or_default()
-            .grapheme_indices(true)
-            .rev()
-            .peekable();
-        let mut grow_end = self
-            .get(meet.end..)
-            .unwrap_or_default()
-            .grapheme_indices(true)
-            .peekable();
+        let mut grow_start = GraphemesRev::ending_at(self, meet.start).peekable();
+        let mut grow_end = Graphemes::starting_at(self, meet.end).peekable();
         loop {
+            // not identical branches: both calls advance an iterator, so trying the same two
+            // sides in the opposite order is a different operation
+            #[allow(clippy::if_same_then_else)]
             let grown = if anchor.removed_start >= anchor.removed_end {
                 try_grow_start(&mut anchor, &mut grow_start, max_width)
-                    || try_grow_end(&mut anchor, &mut grow_end, meet.end, max_width)
+                    || try_grow_end(&mut anchor, &mut grow_end, max_width)
             } else {
-                try_grow_end(&mut anchor, &mut grow_end, meet.end, max_width)
+                try_grow_end(&mut anchor, &mut grow_end, max_width)
                     || try_grow_start(&mut anchor, &mut grow_start, max_width)
             };
             if !grown {
@@ -445,27 +587,20 @@ impl UnicodeTruncateStr for str {
         // most balanced window, and the penalty is never smaller than it, so the first window that
         // is more off center than the best one is worth cannot be followed by a better one.
         let mut current = anchor;
-        let removals = self
-            .get(anchor.start..)
-            .unwrap_or_default()
-            .grapheme_indices(true);
-        for (byte_index, grapheme) in removals {
-            let width = grapheme.width();
-            current.start = anchor
-                .start
-                .saturating_add(byte_index)
-                .saturating_add(grapheme.len());
-            current.removed_start = current.removed_start.saturating_add(width);
+        let removals = Graphemes::starting_at(self, anchor.start);
+        for cluster in removals {
+            current.start = cluster.end();
+            current.removed_start = current.removed_start.saturating_add(cluster.width);
             if current.start > current.end {
                 // the window was empty and this grapheme is wider than the budget, so it moves
                 // from the removed part at the end to the removed part at the start
                 current.end = current.start;
-                current.removed_end = current.removed_end.saturating_sub(width);
+                current.removed_end = current.removed_end.saturating_sub(cluster.width);
                 grow_end.next();
             } else {
-                current.kept = current.kept.saturating_sub(width);
+                current.kept = current.kept.saturating_sub(cluster.width);
             }
-            while try_grow_end(&mut current, &mut grow_end, meet.end, max_width) {}
+            while try_grow_end(&mut current, &mut grow_end, max_width) {}
             if current.off_center() > best.penalty(max_width) {
                 break;
             }
@@ -477,22 +612,17 @@ impl UnicodeTruncateStr for str {
         // Slide the window towards the start of the string, shrinking it from the end whenever it
         // no longer fits. `grow_start` kept its position from growing the anchor.
         let mut current = anchor;
-        let mut shrink_end = self
-            .get(..anchor.end)
-            .unwrap_or_default()
-            .grapheme_indices(true)
-            .rev();
-        for (byte_index, grapheme) in grow_start {
-            let width = grapheme.width();
-            current.start = byte_index;
-            current.removed_start = current.removed_start.saturating_sub(width);
-            current.kept = current.kept.saturating_add(width);
+        let mut shrink_end = GraphemesRev::ending_at(self, anchor.end);
+        for cluster in grow_start {
+            current.start = cluster.start;
+            current.removed_start = current.removed_start.saturating_sub(cluster.width);
+            current.kept = current.kept.saturating_add(cluster.width);
             while current.kept > max_width {
                 // unwrap is safe as the window is not empty
-                let (end_index, end_grapheme) = shrink_end.next().unwrap();
-                current.end = end_index;
-                current.removed_end = current.removed_end.saturating_add(end_grapheme.width());
-                current.kept = current.kept.saturating_sub(end_grapheme.width());
+                let last = shrink_end.next().unwrap();
+                current.end = last.start;
+                current.removed_end = current.removed_end.saturating_add(last.width);
+                current.kept = current.kept.saturating_sub(last.width);
             }
             if current.off_center() > best.penalty(max_width) {
                 break;

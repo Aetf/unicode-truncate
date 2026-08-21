@@ -206,6 +206,31 @@ pub trait UnicodeTruncateStr {
         align: Alignment,
         truncate: bool,
     ) -> std::borrow::Cow<'_, str>;
+
+    /// Truncates and pads a string to be exactly `target_width` in terms of display width, with
+    /// the truncation following the alignment. Only available when the `std` feature of this
+    /// library is activated, and it is activated by default.
+    ///
+    /// This differs from [`unicode_pad`](crate::UnicodeTruncateStr::unicode_pad), which always
+    /// truncates by removing the end of the string no matter the alignment. Here the string is
+    /// truncated like
+    /// [`unicode_truncate_aligned`](crate::UnicodeTruncateStr::unicode_truncate_aligned), so a
+    /// centered string keeps its middle, and then padded to exact `target_width` according to
+    /// `align`.
+    ///
+    /// # Arguments
+    /// * `target_width` - the display width to truncate and pad to
+    /// * `align` - alignment for truncation and padding
+    #[cfg(feature = "std")]
+    #[inline]
+    fn unicode_pad_aligned(
+        &self,
+        target_width: usize,
+        align: Alignment,
+    ) -> std::borrow::Cow<'_, str> {
+        let (truncated, columns) = self.unicode_truncate_aligned(target_width, align);
+        pad_with_spaces(truncated, columns, target_width, align)
+    }
 }
 
 /// Iterates over all grapheme boundaries of `s`, including the one past the last grapheme,
@@ -487,40 +512,52 @@ impl UnicodeTruncateStr for str {
         align: Alignment,
         truncate: bool,
     ) -> std::borrow::Cow<'_, str> {
-        use std::borrow::Cow;
-
         if !truncate && measure_width(self) >= target_width {
-            return Cow::Borrowed(self);
+            return std::borrow::Cow::Borrowed(self);
         }
 
         let (truncated, columns) = self.unicode_truncate(target_width);
-        if columns == target_width {
-            return Cow::Borrowed(truncated);
-        }
-
-        // the string is less than width, or truncated to less than width
-        let diff = target_width.saturating_sub(columns);
-        let (left_pad, right_pad) = match align {
-            Alignment::Left => (0, diff),
-            Alignment::Right => (diff, 0),
-            Alignment::Center => (diff / 2, diff.saturating_sub(diff / 2)),
-        };
-        debug_assert_eq!(diff, left_pad.saturating_add(right_pad));
-
-        let new_len = truncated
-            .len()
-            .checked_add(diff)
-            .expect("Padded result should fit in a new String");
-        let mut result = String::with_capacity(new_len);
-        for _ in 0..left_pad {
-            result.push(' ');
-        }
-        result += truncated;
-        for _ in 0..right_pad {
-            result.push(' ');
-        }
-        Cow::Owned(result)
+        pad_with_spaces(truncated, columns, target_width, align)
     }
+}
+
+/// Pads `truncated`, which is `columns` in display width, with spaces to exactly `target_width`
+/// according to `align`. Only available when the `std` feature of this library is activated.
+#[cfg(feature = "std")]
+fn pad_with_spaces(
+    truncated: &str,
+    columns: usize,
+    target_width: usize,
+    align: Alignment,
+) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+
+    if columns == target_width {
+        return Cow::Borrowed(truncated);
+    }
+
+    // the string is less than width, or truncated to less than width
+    let diff = target_width.saturating_sub(columns);
+    let (left_pad, right_pad) = match align {
+        Alignment::Left => (0, diff),
+        Alignment::Right => (diff, 0),
+        Alignment::Center => (diff / 2, diff.saturating_sub(diff / 2)),
+    };
+    debug_assert_eq!(diff, left_pad.saturating_add(right_pad));
+
+    let new_len = truncated
+        .len()
+        .checked_add(diff)
+        .expect("Padded result should fit in a new String");
+    let mut result = String::with_capacity(new_len);
+    for _ in 0..left_pad {
+        result.push(' ');
+    }
+    result += truncated;
+    for _ in 0..right_pad {
+        result.push(' ');
+    }
+    Cow::Owned(result)
 }
 
 #[cfg(test)]
@@ -935,6 +972,63 @@ mod tests {
             "abc".unicode_truncate_aligned(1, Alignment::Right),
             ("c", 1)
         );
+    }
+
+    #[cfg(feature = "std")]
+    mod pad_aligned {
+        use super::*;
+
+        /// Unlike `unicode_pad`, the truncation follows the alignment.
+        #[test]
+        fn truncates_towards_the_alignment() {
+            assert_eq!("abcdef".unicode_pad_aligned(4, Alignment::Left), "abcd");
+            assert_eq!("abcdef".unicode_pad_aligned(4, Alignment::Center), "bcde");
+            assert_eq!("abcdef".unicode_pad_aligned(4, Alignment::Right), "cdef");
+            // while unicode_pad cuts from the end no matter the alignment
+            assert_eq!("abcdef".unicode_pad(4, Alignment::Right, true), "abcd");
+        }
+
+        /// A wide character keeps the result under the target, padding makes up the difference
+        /// on the side the alignment leaves open.
+        #[test]
+        fn pads_up_to_the_target() {
+            assert_eq!("你好吗".unicode_pad_aligned(3, Alignment::Left), "你 ");
+            assert_eq!("你好吗".unicode_pad_aligned(3, Alignment::Center), "好 ");
+            assert_eq!("你好吗".unicode_pad_aligned(3, Alignment::Right), " 吗");
+        }
+
+        #[test]
+        fn shorter_strings_are_only_padded() {
+            assert_eq!("ab".unicode_pad_aligned(4, Alignment::Left), "ab  ");
+            assert_eq!("ab".unicode_pad_aligned(4, Alignment::Center), " ab ");
+            assert_eq!("ab".unicode_pad_aligned(4, Alignment::Right), "  ab");
+        }
+
+        #[test]
+        fn zero_width() {
+            assert_eq!("ab".unicode_pad_aligned(0, Alignment::Center), "");
+            assert_eq!("".unicode_pad_aligned(2, Alignment::Center), "  ");
+        }
+
+        /// The result is always exactly the target width, including on strings whose width is
+        /// not the sum of the widths of their graphemes.
+        #[test]
+        fn always_exactly_the_target_width() {
+            let lam_alefs = "\u{0644}\u{0627}\u{0644}\u{0627}\u{0644}\u{0627}\u{0644}\u{0627}";
+            for align in [Alignment::Left, Alignment::Center, Alignment::Right] {
+                for input in ["abcdef", "你好吗", lam_alefs, "123👨‍👩‍👧‍👦456", ""]
+                {
+                    for target_width in 0..10 {
+                        let padded = input.unicode_pad_aligned(target_width, align);
+                        assert_eq!(
+                            padded.width(),
+                            target_width,
+                            "{input:?} {align:?} at {target_width}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[cfg(feature = "std")]

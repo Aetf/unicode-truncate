@@ -96,10 +96,10 @@ assert_eq!(str.width(), 5);
 )]
 
 use core::cmp::Reverse;
-use core::convert::TryInto;
 
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
+mod graphemes;
+
+use graphemes::{measure_width, Graphemes, GraphemesRev};
 
 /// Defines the alignment for truncation and padding.
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
@@ -224,209 +224,6 @@ fn grapheme_boundaries(s: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
             *sum = sum.checked_add(grapheme_width)?;
             Some((byte_index, current_width))
         })
-}
-
-/// A grapheme cluster as the truncation scans walk over it: where it starts, how many bytes it
-/// takes and how many columns it occupies.
-#[derive(Clone, Copy)]
-struct Grapheme {
-    start: usize,
-    len: usize,
-    width: usize,
-}
-
-impl Grapheme {
-    #[inline]
-    fn end(&self) -> usize {
-        self.start.saturating_add(self.len)
-    }
-}
-
-/// Whether the byte at `index` is a complete grapheme cluster on its own, decidable from one
-/// neighboring byte: a printable ASCII byte breaks from any ASCII byte after it (GB4, GB5 and
-/// GB999, and it cannot be the CR of a CR LF pair), and every non-ASCII combining character,
-/// joiner or modifier starts with a non-ASCII byte.
-#[inline]
-fn is_ascii_cluster(bytes: &[u8], index: usize) -> bool {
-    matches!(bytes[index], 0x20..=0x7E) && bytes.get(index.wrapping_add(1)).is_none_or(u8::is_ascii)
-}
-
-/// The display width of a string, equal to [`width`](UnicodeWidthStr::width) but skipping over
-/// runs of ASCII. The cut points are the bytes passing [`is_ascii_cluster`]: the width state
-/// machine reaches such a byte in its default state, as every state a following ASCII byte can
-/// produce is one no printable ASCII byte reacts to, so the total width is the sum over the
-/// pieces. This makes the same positions the provable reset points of both segmentation and
-/// width measurement.
-#[inline]
-fn measure_width(text: &str) -> usize {
-    let bytes = text.as_bytes();
-    let mut width = 0usize;
-    let mut pos = 0usize;
-    while pos < bytes.len() {
-        if is_ascii_cluster(bytes, pos) {
-            width = width.saturating_add(1);
-            pos = pos.saturating_add(1);
-        } else {
-            let start = pos;
-            pos = pos.saturating_add(1);
-            loop {
-                // every byte of a multi byte character has its high bit set, so a whole word of
-                // such bytes cannot contain a cut point and is skipped in one comparison
-                if let Some(chunk) = bytes.get(pos..pos.saturating_add(8)) {
-                    // unwrap is safe as the chunk is exactly eight bytes
-                    let word = u64::from_ne_bytes(chunk.try_into().unwrap());
-                    if word & 0x8080_8080_8080_8080 == 0x8080_8080_8080_8080 {
-                        pos = pos.saturating_add(8);
-                        continue;
-                    }
-                }
-                if pos >= bytes.len() || is_ascii_cluster(bytes, pos) {
-                    break;
-                }
-                pos = pos.saturating_add(1);
-            }
-            // unwrap is safe as both positions sit on ASCII bytes or the ends of the string
-            width = width.saturating_add(text.get(start..pos).unwrap().width());
-        }
-    }
-    width
-}
-
-/// Iterates over the grapheme clusters of a string like
-/// [`grapheme_indices`](UnicodeSegmentation::grapheme_indices), but yields each cluster with its
-/// width, and short circuits runs of ASCII: a cluster passing [`is_ascii_cluster`] needs neither
-/// segmentation nor a width lookup. Other text is delegated to a real segmenter, which is entered
-/// and left only at cluster boundaries next to ASCII, where segmenting the rest of the string in
-/// isolation provably matches segmenting the whole.
-struct Graphemes<'a> {
-    text: &'a str,
-    /// The boundary the next cluster starts at.
-    pos: usize,
-    /// The segmenter for the current run of non-ASCII text and the offset it counts from.
-    inner: Option<(usize, unicode_segmentation::GraphemeIndices<'a>)>,
-}
-
-impl<'a> Graphemes<'a> {
-    #[inline]
-    fn new(text: &'a str) -> Self {
-        Self::starting_at(text, 0)
-    }
-
-    /// Starts walking at `pos`, which must be a cluster boundary of `text`.
-    #[inline]
-    fn starting_at(text: &'a str, pos: usize) -> Self {
-        Graphemes {
-            text,
-            pos,
-            inner: None,
-        }
-    }
-}
-
-impl Iterator for Graphemes<'_> {
-    type Item = Grapheme;
-
-    #[inline]
-    fn next(&mut self) -> Option<Grapheme> {
-        let bytes = self.text.as_bytes();
-        if self.pos >= bytes.len() {
-            return None;
-        }
-        if is_ascii_cluster(bytes, self.pos) {
-            self.inner = None;
-            let cluster = Grapheme {
-                start: self.pos,
-                len: 1,
-                width: 1,
-            };
-            self.pos = self.pos.saturating_add(1);
-            return Some(cluster);
-        }
-        if self.inner.is_none() {
-            // unwrap is safe as pos is a cluster boundary
-            let rest = self.text.get(self.pos..).unwrap();
-            self.inner = Some((self.pos, rest.grapheme_indices(true)));
-        }
-        // unwrap is safe as it was just filled in
-        let (base, segmenter) = self.inner.as_mut().unwrap();
-        // unwrap is safe as pos is not past the end
-        let (index, grapheme) = segmenter.next().unwrap();
-        let cluster = Grapheme {
-            start: base.saturating_add(index),
-            len: grapheme.len(),
-            width: grapheme.width(),
-        };
-        self.pos = cluster.end();
-        Some(cluster)
-    }
-}
-
-/// The backwards counterpart of [`Graphemes`].
-struct GraphemesRev<'a> {
-    text: &'a str,
-    /// The boundary the next cluster ends at.
-    pos: usize,
-    /// The segmenter for the current run of non-ASCII text; it works on a prefix of the string,
-    /// so its indices need no offset.
-    inner: Option<unicode_segmentation::GraphemeIndices<'a>>,
-}
-
-impl<'a> GraphemesRev<'a> {
-    #[inline]
-    fn new(text: &'a str) -> Self {
-        Self::ending_at(text, text.len())
-    }
-
-    /// Starts walking backwards from `pos`, which must be a cluster boundary of `text`.
-    #[inline]
-    fn ending_at(text: &'a str, pos: usize) -> Self {
-        GraphemesRev {
-            text,
-            pos,
-            inner: None,
-        }
-    }
-}
-
-impl Iterator for GraphemesRev<'_> {
-    type Item = Grapheme;
-
-    #[inline]
-    fn next(&mut self) -> Option<Grapheme> {
-        let bytes = self.text.as_bytes();
-        if self.pos == 0 {
-            return None;
-        }
-        let previous = self.pos.saturating_sub(1);
-        if matches!(bytes[previous], 0x20..=0x7E)
-            && (previous == 0 || bytes[previous.saturating_sub(1)].is_ascii())
-        {
-            // the mirror image of is_ascii_cluster: a printable ASCII byte also breaks from any
-            // ASCII byte before it
-            self.inner = None;
-            self.pos = previous;
-            return Some(Grapheme {
-                start: previous,
-                len: 1,
-                width: 1,
-            });
-        }
-        if self.inner.is_none() {
-            // unwrap is safe as pos is a cluster boundary
-            let rest = self.text.get(..self.pos).unwrap();
-            self.inner = Some(rest.grapheme_indices(true));
-        }
-        // unwrap is safe as it was just filled in
-        let segmenter = self.inner.as_mut().unwrap();
-        // unwrap is safe as pos is not zero
-        let (index, grapheme) = segmenter.next_back().unwrap();
-        self.pos = index;
-        Some(Grapheme {
-            start: index,
-            len: grapheme.len(),
-            width: grapheme.width(),
-        })
-    }
 }
 
 /// A candidate result of a centered truncation: the byte range that would be kept, together with
@@ -728,6 +525,9 @@ impl UnicodeTruncateStr for str {
 
 #[cfg(test)]
 mod tests {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
     use super::*;
 
     mod truncate_end {

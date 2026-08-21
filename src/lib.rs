@@ -13,8 +13,61 @@
 
 //! Unicode-aware algorithm to pad or truncate `str` in terms of displayed width.
 //!
-//! See the [`UnicodeTruncateStr`](crate::UnicodeTruncateStr) trait for new methods available on
-//! `str`.
+//! See the [`UnicodeTruncateStr`] trait for new methods available on `str`.
+//!
+//! # How truncation works
+//!
+//! Text is measured in display columns with [`unicode_width`], and is only ever cut at boundaries
+//! between grapheme clusters, so a cluster is never split. The width of a slice is taken to be the
+//! sum of the widths of its graphemes.
+//!
+//! Because a grapheme can be several columns wide, the requested width cannot always be hit
+//! exactly. Truncating from one end is still unambiguous, the longest slice that fits is returned.
+//! Truncating from both ends has to weigh how much is kept against how centered it is.
+//!
+//! ## Centered truncation
+//!
+//! Every slice of the input that starts and ends on a grapheme boundary and is at most `max_width`
+//! wide is a candidate. Each candidate is scored, in display columns, by
+//!
+//! ```text
+//! penalty = (max_width - width of the slice) + distance from the center of the slice
+//!                                              to the center of the whole string
+//! ```
+//!
+//! and the candidate with the lowest penalty is returned. A penalty of zero is a perfect result:
+//! the whole budget is used and the slice is exactly centered. Ties are broken towards removing
+//! less from the start, and then towards the later slice, which drops zero width graphemes at the
+//! start while keeping the ones at the end.
+//!
+//! The two terms are traded against each other, so a column of width is given up when it buys more
+//! than a column of centering:
+//!
+//! ```rust
+//! use unicode_truncate::UnicodeTruncateStr;
+//! use unicode_width::UnicodeWidthStr;
+//!
+//! let text = "好你👪bbᄀᄀᄀ好👪";
+//! assert_eq!(text.width(), 18);
+//! // "bᄀᄀᄀ好👪" is 11 columns but sits 3.5 columns off center, this is 10 and dead center
+//! assert_eq!(text.unicode_truncate_centered(11), ("👪bbᄀᄀᄀ", 10));
+//! ```
+//!
+//! A grapheme wider than `max_width` cannot be part of any candidate. One sitting in the middle
+//! therefore pushes the result off to one side, and using up the budget is all that is left to
+//! optimize for:
+//!
+//! ```rust
+//! use unicode_truncate::UnicodeTruncateStr;
+//! // the family emoji is 2 columns wide and cannot be split
+//! assert_eq!("123👨‍👩‍👧‍👦456".unicode_truncate_centered(1), ("3", 1));
+//! ```
+//!
+//! ## Known limitation
+//!
+//! A few ligatures, such as the Arabic lam-alef, span grapheme clusters and render narrower than
+//! their parts. For a string containing one, its width is less than the sum of the widths of its
+//! graphemes, and the width returned alongside the truncated slice is then too large.
 //!
 //! # Examples
 //! Safely truncate string to display width even not at character boundaries.
@@ -40,7 +93,8 @@ assert_eq!(str.width(), 5);
 "##
 )]
 
-use itertools::{merge_join_by, Either};
+use core::cmp::Reverse;
+
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -88,9 +142,11 @@ pub trait UnicodeTruncateStr {
     /// Truncates a string to be at most `width` in terms of display width by removing
     /// characters at both start and end.
     ///
-    /// For wide characters, it may not always be possible to truncate at exact width. In this case,
-    /// the longest possible string is returned. To help the caller determine the situation, the
-    /// display width of the returned string slice is also returned.
+    /// For wide characters, it may not always be possible to truncate at exact width, nor to stay
+    /// exactly centered. The slice with the lowest sum of unused width and distance from the
+    /// center is returned, see [the crate documentation](crate#centered-truncation) for the exact
+    /// rule. To help the caller determine the situation, the display width of the returned string
+    /// slice is also returned.
     ///
     /// Zero-width characters decided by [`unicode_width`] are included if they are at end, or
     /// removed if they are at the beginning when deciding the truncation point.
@@ -107,8 +163,10 @@ pub trait UnicodeTruncateStr {
     /// characters from both sides are removed.
     ///
     /// For wide characters, it may not always be possible to truncate at exact width. In this case,
-    /// the longest possible string is returned. To help the caller determine the situation, the
-    /// display width of the returned string slice is also returned.
+    /// the longest possible string is returned, or for [`Alignment::Center`] the one with the
+    /// lowest penalty, see [the crate documentation](crate#centered-truncation). To help the
+    /// caller determine the situation, the display width of the returned string slice is also
+    /// returned.
     ///
     /// Zero-width characters decided by [`unicode_width`] are included if they are at end, or
     /// removed if they are at the beginning when deciding the truncation point.
@@ -147,24 +205,101 @@ pub trait UnicodeTruncateStr {
     ) -> std::borrow::Cow<'_, str>;
 }
 
+/// Iterates over all grapheme boundaries of `s`, including the one past the last grapheme,
+/// yielding the byte index of the boundary and the display width of the string before it.
+#[inline]
+fn grapheme_boundaries(s: &str) -> impl Iterator<Item = (usize, usize)> + '_ {
+    s.grapheme_indices(true)
+        .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
+        // chain a final element representing the position past the last grapheme
+        .chain(core::iter::once((s.len(), 0)))
+        .scan(0usize, |sum, (byte_index, grapheme_width)| {
+            // byte_index is the start while the grapheme_width is at the end. Current width is
+            // the sum until now while the next byte_index is including the current
+            // grapheme_width.
+            let current_width = *sum;
+            *sum = sum.checked_add(grapheme_width)?;
+            Some((byte_index, current_width))
+        })
+}
+
+/// A candidate result of a centered truncation: the byte range that would be kept, together with
+/// how much display width is removed on each side and how much is kept.
+///
+/// All widths are the sum of the widths of the graphemes involved.
+#[derive(Clone, Copy)]
+struct Window {
+    start: usize,
+    end: usize,
+    removed_start: usize,
+    removed_end: usize,
+    kept: usize,
+}
+
+impl Window {
+    /// Twice the distance between the center of the window and the center of the whole string.
+    ///
+    /// Doubled to stay in whole columns: either center can sit on a half column.
+    #[inline]
+    fn off_center(&self) -> usize {
+        self.removed_start.abs_diff(self.removed_end)
+    }
+
+    /// How bad this window is, doubled to match [`Window::off_center`]. Zero is a perfect result:
+    /// the whole budget is used and the window is exactly centered.
+    #[inline]
+    fn penalty(&self, max_width: usize) -> usize {
+        max_width
+            .saturating_sub(self.kept)
+            .saturating_mul(2)
+            .saturating_add(self.off_center())
+    }
+
+    /// The order the result is picked by, smaller is better: least penalty, then least removed
+    /// from the start, then the latest start, which drops zero width graphemes at the start while
+    /// keeping the ones at the end.
+    #[inline]
+    fn rank(&self, max_width: usize) -> (usize, usize, Reverse<usize>) {
+        (
+            self.penalty(max_width),
+            self.removed_start,
+            Reverse(self.start),
+        )
+    }
+}
+
+/// Grows `window` towards the end of the string as far as `max_width` allows, taking graphemes
+/// from `graphemes`, which yields byte indices relative to `base`.
+#[inline]
+fn grow_window<'a, I>(
+    window: &mut Window,
+    graphemes: &mut core::iter::Peekable<I>,
+    base: usize,
+    max_width: usize,
+) where
+    I: Iterator<Item = (usize, &'a str)>,
+{
+    while let Some(&(byte_index, grapheme)) = graphemes.peek() {
+        let width = grapheme.width();
+        let Some(grown) = window.kept.checked_add(width) else {
+            break;
+        };
+        if grown > max_width {
+            break;
+        }
+        window.kept = grown;
+        window.removed_end = window.removed_end.saturating_sub(width);
+        window.end = base
+            .saturating_add(byte_index)
+            .saturating_add(grapheme.len());
+        graphemes.next();
+    }
+}
+
 impl UnicodeTruncateStr for str {
     #[inline]
     fn unicode_truncate(&self, max_width: usize) -> (&str, usize) {
-        let (byte_index, new_width) = self
-            .grapheme_indices(true)
-            // map to byte index and the width of grapheme at the index
-            .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
-            // chain a final element representing the position past the last char
-            .chain(core::iter::once((self.len(), 0)))
-            // fold to byte index and the width up to the index
-            .scan(0, |sum: &mut usize, (byte_index, grapheme_width)| {
-                // byte_index is the start while the grapheme_width is at the end. Current width is
-                // the sum until now while the next byte_index is including the current
-                // grapheme_width.
-                let current_width = *sum;
-                *sum = sum.checked_add(grapheme_width)?;
-                Some((byte_index, current_width))
-            })
+        let (byte_index, new_width) = grapheme_boundaries(self)
             // take the longest but still shorter than requested
             .take_while(|&(_, current_width)| current_width <= max_width)
             .last()
@@ -210,81 +345,121 @@ impl UnicodeTruncateStr for str {
             return (self, original_width);
         }
 
-        // We need to remove at least this much
-        // unwrap is safe as original_width > max_width
-        let min_removal_width = original_width.checked_sub(max_width).unwrap();
+        // The window is scored against the sum of the widths of the graphemes, which is not always
+        // the width of the whole string, so it has to be summed up separately. Once the two agree
+        // this pass can go away and `original_width` can be used instead.
+        // unwrap is safe as grapheme_boundaries always yields the position past the last grapheme
+        let (_, summed_width) = grapheme_boundaries(self).last().unwrap();
 
-        // Around the half to improve performance. In order to ensure the center grapheme stays
-        // remove its max possible length. This assumes a grapheme width is always <= 10 (4 people
-        // family emoji has width 8). This might end up not perfect on graphemes wider than this but
-        // performance is more important here.
-        let less_than_half = min_removal_width.saturating_sub(10) / 2;
+        // Four cursors, each walking away from the anchor found below and never backtracking:
+        // `starts`/`ends` shrink the window during the search for the anchor and keep going for
+        // the pass towards the end resp. the start.
+        let mut starts = self.grapheme_indices(true);
+        let mut ends = self.grapheme_indices(true).rev();
 
-        let from_start = self
+        // Shrink the window from both ends, always giving up on the side that gave up less so far,
+        // until it fits. `kept > max_width` implies the window is not empty, so the two cursors can
+        // never pass each other.
+        let mut anchor = Window {
+            start: 0,
+            end: self.len(),
+            removed_start: 0,
+            removed_end: 0,
+            kept: summed_width,
+        };
+        while anchor.kept > max_width {
+            if anchor.removed_start <= anchor.removed_end {
+                // unwrap is safe as the window is not empty
+                let (byte_index, grapheme) = starts.next().unwrap();
+                let width = grapheme.width();
+                anchor.start = byte_index.saturating_add(grapheme.len());
+                anchor.removed_start = anchor.removed_start.saturating_add(width);
+                anchor.kept = anchor.kept.saturating_sub(width);
+            } else {
+                // unwrap is safe as the window is not empty
+                let (byte_index, grapheme) = ends.next().unwrap();
+                anchor.end = byte_index;
+                anchor.removed_end = anchor.removed_end.saturating_add(grapheme.width());
+                anchor.kept = anchor.kept.saturating_sub(grapheme.width());
+            }
+        }
+
+        // The cursor used to grow the window towards the end of the string.
+        let mut grow_end = self
+            .get(anchor.end..)
+            .unwrap_or_default()
             .grapheme_indices(true)
-            .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
-            // fold to byte index and the width from start to the index (not including the current
-            // grapheme width)
-            .scan(
-                (0usize, 0usize),
-                |(sum, prev_width), (byte_index, grapheme_width)| {
-                    *sum = sum.checked_add(*prev_width)?;
-                    *prev_width = grapheme_width;
-                    Some((byte_index, *sum))
-                },
-            )
-            // fast forward to around the half
-            .skip_while(|&(_, removed)| removed < less_than_half);
+            .peekable();
+        let base = anchor.end;
+        grow_window(&mut anchor, &mut grow_end, base, max_width);
 
-        let from_end = self
+        let mut best = anchor;
+
+        // Slide the window towards the end of the string. `off_center` only grows once past the
+        // most balanced window, and the penalty is never smaller than it, so the first window that
+        // is more off center than the best one is worth cannot be followed by a better one.
+        let mut current = anchor;
+        for (byte_index, grapheme) in starts {
+            let width = grapheme.width();
+            current.start = byte_index.saturating_add(grapheme.len());
+            current.removed_start = current.removed_start.saturating_add(width);
+            if current.start > current.end {
+                // the window was empty and this grapheme is wider than the budget, so it moves
+                // from the removed part at the end to the removed part at the start
+                current.end = current.start;
+                current.removed_end = current.removed_end.saturating_sub(width);
+                grow_end.next();
+            } else {
+                current.kept = current.kept.saturating_sub(width);
+            }
+            grow_window(&mut current, &mut grow_end, base, max_width);
+            if current.off_center() > best.penalty(max_width) {
+                break;
+            }
+            if current.rank(max_width) < best.rank(max_width) {
+                best = current;
+            }
+        }
+
+        // Slide the window towards the start of the string, shrinking it from the end whenever it
+        // no longer fits.
+        let mut current = anchor;
+        let grow_start = self
+            .get(..anchor.start)
+            .unwrap_or_default()
             .grapheme_indices(true)
-            .map(|(byte_index, grapheme)| (byte_index, grapheme.width()))
-            .rev()
-            // fold to byte index and the width from end to the index (including the current
-            // grapheme width)
-            .scan(0usize, |sum, (byte_index, grapheme_width)| {
-                *sum = sum.checked_add(grapheme_width)?;
-                Some((byte_index, *sum))
-            })
-            // fast forward to around the half
-            .skip_while(|&(_, removed)| removed < less_than_half);
+            .rev();
+        // `ends` stopped before the window was grown to its final size, so it cannot be reused
+        let mut shrink_end = self
+            .get(..anchor.end)
+            .unwrap_or_default()
+            .grapheme_indices(true)
+            .rev();
+        for (byte_index, grapheme) in grow_start {
+            let width = grapheme.width();
+            current.start = byte_index;
+            current.removed_start = current.removed_start.saturating_sub(width);
+            current.kept = current.kept.saturating_add(width);
+            while current.kept > max_width {
+                // unwrap is safe as the window is not empty
+                let (end_index, end_grapheme) = shrink_end.next().unwrap();
+                current.end = end_index;
+                current.removed_end = current.removed_end.saturating_add(end_grapheme.width());
+                current.kept = current.kept.saturating_sub(end_grapheme.width());
+            }
+            if current.off_center() > best.penalty(max_width) {
+                break;
+            }
+            if current.rank(max_width) < best.rank(max_width) {
+                best = current;
+            }
+        }
 
-        let (start_index, end_index, removed_width) = merge_join_by(
-            from_start,
-            from_end,
-            // taking from either left or right iter depending on which side has less removed width
-            |&(_, start_removed), &(_, end_removed)| start_removed < end_removed,
-        )
-        // remember the last left or right and combine them to one sequence of operations
-        .scan(
-            (0usize, 0usize, 0usize, 0usize),
-            |(start_removed, end_removed, start_index, end_index), position| {
-                match position {
-                    Either::Left((idx, removed)) => {
-                        *start_index = idx;
-                        *start_removed = removed;
-                    }
-                    Either::Right((idx, removed)) => {
-                        *end_index = idx;
-                        *end_removed = removed;
-                    }
-                }
-                // unwrap is safe as total length was also <= usize::MAX
-                let total_removed = start_removed.checked_add(*end_removed).unwrap();
-                Some((*start_index, *end_index, total_removed))
-            },
-        )
-        .find(|&(_, _, removed)| removed >= min_removal_width)
-        // should not happen as the removed width is not larger than the original width
-        // but a sane default is to remove everything (i.e. min_removal_width too large)
-        .unwrap_or((0, 0, original_width));
-
-        // unwrap is safe as the index comes from grapheme_indices
-        let result = self.get(start_index..end_index).unwrap();
-        // unwrap is safe as removed is always smaller than total width
-        let result_width = original_width.checked_sub(removed_width).unwrap();
-        debug_assert_eq!(result.width(), result_width);
-        (result, result_width)
+        // unwrap is safe as both indices come from grapheme_indices and the window is never
+        // reversed
+        let result = self.get(best.start..best.end).unwrap();
+        debug_assert_eq!(result.width(), best.kept);
+        (result, best.kept)
     }
 
     #[cfg(feature = "std")]
@@ -546,11 +721,129 @@ mod tests {
             // Family emoji should be of width 2
             assert_eq!("👨‍👩‍👧‍👦".width(), 2);
 
-            assert_eq!(input.unicode_truncate_centered(1), ("", 0));
+            // the family cannot be split, so the widest window of width 1 is a single digit
+            assert_eq!(input.unicode_truncate_centered(1), ("3", 1));
             assert_eq!(input.unicode_truncate_centered(2), ("👨‍👩‍👧‍👦", 2));
             assert_eq!(input.unicode_truncate_centered(4), ("3👨‍👩‍👧‍👦4", 4));
             assert_eq!(input.unicode_truncate_centered(6), ("23👨‍👩‍👧‍👦45", 6));
             assert_eq!(input.unicode_truncate_centered(20), (input, 8));
+        }
+
+        /// The removal used to be tracked from the end only after the first grapheme was removed
+        /// from the end, resulting in a reversed range.
+        #[test]
+        fn removal_only_from_start() {
+            assert_eq!("a你".unicode_truncate_centered(2), ("你", 2));
+            assert_eq!("a你b".unicode_truncate_centered(2), ("你", 2));
+        }
+
+        /// A single grapheme can be wider than any assumed constant.
+        #[test]
+        fn very_wide_grapheme() {
+            // a run of Hangul leading jamo is a single grapheme cluster
+            const WIDE: &str = "\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}";
+            assert_eq!(WIDE.graphemes(true).count(), 1);
+            assert_eq!(WIDE.width(), 14);
+
+            let input =
+                "abcdefghij\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}klmnopqrst";
+            assert_eq!(
+                input.unicode_truncate_centered(16),
+                (
+                    "j\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}k",
+                    16
+                )
+            );
+            // the wide grapheme does not fit, so the widest window is next to it
+            assert_eq!(input.unicode_truncate_centered(12), ("abcdefghij", 10));
+            assert_eq!(input.unicode_truncate_centered(1), ("j", 1));
+
+            let input =
+                "\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}\u{1100}abcdefghijklmnopqrst";
+            assert_eq!(
+                input.unicode_truncate_centered(16),
+                ("abcdefghijklmnop", 16)
+            );
+            assert_eq!(input.unicode_truncate_centered(12), ("abcdefghijkl", 12));
+        }
+    }
+
+    /// The centered variant picks the best window out of a large search space, compare it against
+    /// a brute force search over all grapheme boundaries on pseudo random inputs.
+    #[cfg(feature = "std")]
+    #[test]
+    fn centered_matches_brute_force() {
+        fn brute_force(input: &str, max_width: usize) -> (&str, usize) {
+            if max_width == 0 {
+                return ("", 0);
+            }
+            let total_width = input.width();
+            if total_width <= max_width {
+                return (input, total_width);
+            }
+            let bounds: Vec<(usize, usize)> = grapheme_boundaries(input).collect();
+            let mut best = None;
+            for (i, &(start_index, start_removed)) in bounds.iter().enumerate() {
+                for &(end_index, end_kept) in &bounds[i..] {
+                    let kept = end_kept - start_removed;
+                    if kept > max_width {
+                        break;
+                    }
+                    let window = Window {
+                        start: start_index,
+                        end: end_index,
+                        removed_start: start_removed,
+                        removed_end: total_width - end_kept,
+                        kept,
+                    };
+                    // least penalty, then least removed from the start, then the latest window
+                    let key = (window.rank(max_width), Reverse(end_index));
+                    if best.is_none_or(|(best_key, _)| key < best_key) {
+                        best = Some((key, window));
+                    }
+                }
+            }
+            let window = best.unwrap().1;
+            (&input[window.start..window.end], window.kept)
+        }
+
+        // no character forming a ligature with a neighboring grapheme, those make the width of a
+        // string differ from the sum of the widths of its graphemes
+        let alphabet: Vec<char> =
+            "ab \u{4f60}\u{597d}\u{0306}\u{1100}\u{200d}\u{1f468}\u{1f469}\r\n"
+                .chars()
+                .collect();
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        let mut random = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..2000 {
+            let len = random() as usize % 12;
+            let input: String = (0..len)
+                .map(|_| alphabet[random() as usize % alphabet.len()])
+                .collect();
+            for max_width in 0..8 {
+                let actual = input.unicode_truncate_centered(max_width);
+                assert_eq!(
+                    actual,
+                    brute_force(&input, max_width),
+                    "input {input:?} max_width {max_width}"
+                );
+                assert_eq!(
+                    actual.0.width(),
+                    actual.1,
+                    "input {input:?} max_width {max_width}"
+                );
+                assert!(
+                    actual.1 <= max_width,
+                    "input {:?} max_width {}",
+                    input,
+                    max_width
+                );
+            }
         }
     }
 

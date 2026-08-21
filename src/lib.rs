@@ -825,11 +825,13 @@ mod tests {
             if max_width == 0 {
                 return ("", 0);
             }
-            let total_width = input.width();
-            if total_width <= max_width {
-                return (input, total_width);
+            if input.width() <= max_width {
+                return (input, input.width());
             }
             let bounds: Vec<(usize, usize)> = grapheme_boundaries(input).collect();
+            // like the real search, score in the sum-of-grapheme-widths model
+            // unwrap is safe as grapheme_boundaries always yields the final boundary
+            let total_width = bounds.last().unwrap().1;
             let mut best = None;
             for (i, &(start_index, start_removed)) in bounds.iter().enumerate() {
                 for &(end_index, end_kept) in &bounds[i..] {
@@ -852,13 +854,15 @@ mod tests {
                 }
             }
             let window = best.unwrap().1;
-            (&input[window.start..window.end], window.kept)
+            let result = &input[window.start..window.end];
+            // the search scores by the sum of the grapheme widths, the reported width is measured
+            (result, result.width())
         }
 
         // no character forming a ligature with a neighboring grapheme, those make the width of a
         // string differ from the sum of the widths of its graphemes
         let alphabet: Vec<char> =
-            "ab \u{4f60}\u{597d}\u{0306}\u{1100}\u{200d}\u{1f468}\u{1f469}\r\n"
+            "ab \t\u{7f}\u{4f60}\u{597d}\u{0306}\u{1100}\u{200d}\u{1f468}\u{1f469}\u{1f1e6}\u{1f1e7}\u{0644}\u{0627}\r\n"
                 .chars()
                 .collect();
         let mut seed = 0x2545_f491_4f6c_dd1d_u64;
